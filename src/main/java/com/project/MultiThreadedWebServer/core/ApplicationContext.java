@@ -453,6 +453,11 @@ public class ApplicationContext {
         String beanName = Character.toLowerCase(type.getSimpleName().charAt(0)) + 
                           type.getSimpleName().substring(1);
         beansByName.put(beanName, instance);
+        
+        // Track controllers for RouteResolver
+        if (type.isAnnotationPresent(RestController.class)) {
+            controllers.add(instance);
+        }
     }
 
     /**

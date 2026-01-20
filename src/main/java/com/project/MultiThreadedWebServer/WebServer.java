@@ -8,6 +8,9 @@ import com.project.MultiThreadedWebServer.exception.GlobalExceptionHandler;
 import com.project.MultiThreadedWebServer.filter.Filter;
 import com.project.MultiThreadedWebServer.filter.FilterChain;
 import com.project.MultiThreadedWebServer.filter.LoggingFilter;
+import com.project.MultiThreadedWebServer.controller.HomeController;
+import com.project.MultiThreadedWebServer.controller.UserController;
+import com.project.MultiThreadedWebServer.service.UserService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -140,6 +143,12 @@ public class WebServer {
         logger.info("STEP 1: Initializing IoC Container (ApplicationContext)");
         logger.info("═══════════════════════════════════════════════════════════════");
         applicationContext = new ApplicationContext(basePackage);
+        
+        // Fallback: If no controllers found (JAR mode), register manually
+        if (applicationContext.getControllers().isEmpty()) {
+            logger.info("No controllers found via scanning, registering manually...");
+            registerComponentsManually();
+        }
 
         // Step 2: Initialize Route Resolver and register controllers
         logger.info("═══════════════════════════════════════════════════════════════");
@@ -201,6 +210,39 @@ public class WebServer {
                 ╚═══════════════════════════════════════════════════════════╝
                 """;
         System.out.println(banner);
+    }
+
+    /**
+     * Manually registers components when classpath scanning fails (e.g., in JAR mode).
+     * 
+     * This is a fallback for when the application runs from a JAR file,
+     * where file-based scanning doesn't work because classes are inside the archive.
+     */
+    private void registerComponentsManually() {
+        logger.info("Registering components manually for JAR deployment...");
+        
+        // Register services first (they have no dependencies)
+        UserService userService = new UserService();
+        applicationContext.registerBean(UserService.class, userService);
+        logger.info("  ✓ Registered @Service: UserService");
+        
+        // Register controllers (may depend on services)
+        HomeController homeController = new HomeController();
+        applicationContext.registerBean(HomeController.class, homeController);
+        logger.info("  ✓ Registered @RestController: HomeController");
+        
+        UserController userController = new UserController();
+        // Manually inject UserService into UserController
+        try {
+            java.lang.reflect.Field userServiceField = UserController.class.getDeclaredField("userService");
+            userServiceField.setAccessible(true);
+            userServiceField.set(userController, userService);
+            logger.info("  → Injected UserService into UserController.userService");
+        } catch (Exception e) {
+            logger.error("Failed to inject UserService into UserController", e);
+        }
+        applicationContext.registerBean(UserController.class, userController);
+        logger.info("  ✓ Registered @RestController: UserController");
     }
 
     /**
