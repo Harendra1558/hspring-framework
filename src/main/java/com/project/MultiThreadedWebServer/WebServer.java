@@ -1,5 +1,13 @@
 package com.project.MultiThreadedWebServer;
 
+import com.project.MultiThreadedWebServer.core.ApplicationContext;
+import com.project.MultiThreadedWebServer.core.HttpRequest;
+import com.project.MultiThreadedWebServer.core.HttpResponse;
+import com.project.MultiThreadedWebServer.core.RouteResolver;
+import com.project.MultiThreadedWebServer.exception.GlobalExceptionHandler;
+import com.project.MultiThreadedWebServer.filter.Filter;
+import com.project.MultiThreadedWebServer.filter.FilterChain;
+import com.project.MultiThreadedWebServer.filter.LoggingFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -9,210 +17,324 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+/**
+ * ╔══════════════════════════════════════════════════════════════════════════════╗
+ * ║                         HSPRING WEB SERVER                                   ║
+ * ║              Harendra's Spring Boot Implementation                           ║
+ * ╚══════════════════════════════════════════════════════════════════════════════╝
+ * 
+ * HSpring is a lightweight implementation of Spring Boot internals, created by
+ * Harendra to demonstrate how the Spring Framework works under the hood.
+ * 
+ * This class demonstrates how Spring Boot works internally:
+ * 
+ * 1. APPLICATION CONTEXT (IoC Container)
+ *    - Scans for @Component, @Service, @RestController annotations
+ *    - Creates and manages bean instances
+ *    - Performs dependency injection via @Autowired
+ * 
+ * 2. ROUTE RESOLVER (DispatcherServlet + HandlerMapping)
+ *    - Maps URL patterns to controller methods
+ *    - Supports path variables: /users/{id}
+ *    - Handles GET, POST, PUT, DELETE methods
+ * 
+ * 3. FILTER CHAIN (Interceptors)
+ *    - Pre-processing: logging, authentication, rate limiting
+ *    - Post-processing: response modification, cleanup
+ * 
+ * 4. EXCEPTION HANDLER (ControllerAdvice)
+ *    - Centralized exception handling
+ *    - Consistent error responses
+ * 
+ * 5. HTTP REQUEST/RESPONSE WRAPPERS
+ *    - Parsed request with easy access to headers, body, params
+ *    - Fluent response builder with status, headers, body
+ * 
+ * LIFECYCLE OF A REQUEST:
+ * ┌─────────────────────────────────────────────────────────────────────┐
+ * │  Client Request                                                     │
+ * │       ↓                                                             │
+ * │  ServerSocket.accept() → New Socket Connection                     │
+ * │       ↓                                                             │
+ * │  ThreadPool → Allocate Worker Thread                               │
+ * │       ↓                                                             │
+ * │  Parse HTTP → Create HttpRequest object                            │
+ * │       ↓                                                             │
+ * │  FilterChain.preHandle() → Logging, Auth, etc.                     │
+ * │       ↓                                                             │
+ * │  RouteResolver.resolve() → Find matching route                     │
+ * │       ↓                                                             │
+ * │  Controller Method → Business logic execution                       │
+ * │       ↓                                                             │
+ * │  FilterChain.postHandle() → Post-processing                        │
+ * │       ↓                                                             │
+ * │  HttpResponse.send() → Write response to socket                    │
+ * │       ↓                                                             │
+ * │  Socket.close() → Connection closed                                │
+ * └─────────────────────────────────────────────────────────────────────┘
+ */
 public class WebServer {
-
 
     private static final Logger logger = LoggerFactory.getLogger(WebServer.class);
 
-    /**
-     * Port number on which the server listens for connections.
-     */
-    private static final int PORT = 8080;
+    // Server configuration
+    private final int port;
+    private final int threadPoolSize;
+
+    // Core components (similar to Spring's internal components)
+    private ApplicationContext applicationContext;
+    private RouteResolver routeResolver;
+    private FilterChain filterChain;
+    private GlobalExceptionHandler exceptionHandler;
+
+    // Server state
+    private ExecutorService threadPool;
+    private ServerSocket serverSocket;
+    private volatile boolean running = false;
 
     /**
-     * Number of threads in the thread pool.
+     * Creates a WebServer with default configuration.
      */
-    private static final int THREAD_POOL_SIZE = 10;
+    public WebServer() {
+        this(8080, 10);
+    }
 
     /**
-     * Main method to start the web server.
-     *
-     * @param args command-line arguments (not used).
+     * Creates a WebServer with custom configuration.
+     * 
+     * @param port           Port to listen on
+     * @param threadPoolSize Number of worker threads
+     */
+    public WebServer(int port, int threadPoolSize) {
+        this.port = port;
+        this.threadPoolSize = threadPoolSize;
+    }
+
+    /**
+     * Main entry point - starts the web server.
+     * Similar to SpringApplication.run()
      */
     public static void main(String[] args) {
         WebServer server = new WebServer();
-        ExecutorService threadPool = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
-        server.startServer(threadPool);
+        server.run("com.project.MultiThreadedWebServer");
     }
 
     /**
-     * Reads the body of the HTTP request from the client.
-     *
-     * @param reader  the BufferedReader to read the request body.
-     * @param headers the parsed HTTP headers.
-     * @return the request body as a String.
-     * @throws IOException if an I/O error occurs.
+     * Initializes and starts the web server.
+     * This is the main bootstrap method, similar to SpringApplication.run().
+     * 
+     * @param basePackage The base package to scan for components
      */
-    public static String readRequestBody(BufferedReader reader, Map<String, String> headers) throws IOException {
-        int contentLength = Integer.parseInt(headers.getOrDefault("Content-Length", "0"));
-        char[] body = new char[contentLength];
-        int bytesRead = reader.read(body, 0, contentLength);
+    public void run(String basePackage) {
+        long startTime = System.currentTimeMillis();
+        
+        printBanner();
+        
+        logger.info("Starting HSpring WebServer...");
+        
+        // Step 1: Initialize the IoC Container (ApplicationContext)
+        logger.info("═══════════════════════════════════════════════════════════════");
+        logger.info("STEP 1: Initializing IoC Container (ApplicationContext)");
+        logger.info("═══════════════════════════════════════════════════════════════");
+        applicationContext = new ApplicationContext(basePackage);
 
-        if (bytesRead == contentLength) {
-            return new String(body);
-        } else {
-            throw new RuntimeException("Incomplete Body");
-        }
-    }
-
-    /**
-     * Sends an HTTP error response to the client.
-     *
-     * @param writer         the PrintWriter to write the response.
-     * @param statusCode     the HTTP status code.
-     * @param statusMessage  the HTTP status message.
-     * @param responseFormat the content type of the response (e.g., JSON or HTML).
-     */
-    public static void sendErrorResponse(PrintWriter writer, int statusCode, String statusMessage, String responseFormat) {
-        // Determine response body based on format
-        String body = switch (responseFormat.toLowerCase()) {
-            case "application/json" -> "{\"error\": \"" + statusMessage + "\"}";
-            case "text/html" -> "<html><head><title>" + statusMessage + "</title></head>" +
-                    "<body><h1>" + statusMessage + "</h1></body></html>";
-            default -> "Error: " + statusMessage;
-        };
-
-        sendResponse(writer, statusCode, statusMessage, responseFormat, body);
-    }
-
-    /**
-     * Parses the HTTP headers from the client request.
-     *
-     * @param reader the BufferedReader to read the headers.
-     * @return a Map containing header names and their values.
-     * @throws IOException if an I/O error occurs.
-     */
-    public static Map<String, String> parseHeaders(BufferedReader reader) throws IOException {
-        Map<String, String> headers = new HashMap<>();
-        String line;
-
-        // Read headers line by line until an empty line is encountered
-        while ((line = reader.readLine()) != null && !line.isEmpty()) {
-            int separatorIndex = line.indexOf(": ");
-            if (separatorIndex != -1) {
-                String key = line.substring(0, separatorIndex).trim();
-                String value = line.substring(separatorIndex + 2).trim();
-                headers.put(key, value);
-            }
+        // Step 2: Initialize Route Resolver and register controllers
+        logger.info("═══════════════════════════════════════════════════════════════");
+        logger.info("STEP 2: Initializing Route Resolver");
+        logger.info("═══════════════════════════════════════════════════════════════");
+        routeResolver = new RouteResolver();
+        for (Object controller : applicationContext.getControllers()) {
+            routeResolver.registerController(controller);
         }
 
-        return headers;
+        // Step 3: Initialize Filter Chain
+        logger.info("═══════════════════════════════════════════════════════════════");
+        logger.info("STEP 3: Initializing Filter Chain");
+        logger.info("═══════════════════════════════════════════════════════════════");
+        filterChain = new FilterChain();
+        filterChain.addFilter(new LoggingFilter());
+        // Add more filters here: authFilter, rateLimitFilter, etc.
+
+        // Step 4: Initialize Exception Handler
+        logger.info("═══════════════════════════════════════════════════════════════");
+        logger.info("STEP 4: Initializing Exception Handler");
+        logger.info("═══════════════════════════════════════════════════════════════");
+        exceptionHandler = new GlobalExceptionHandler();
+
+        // Step 5: Create Thread Pool
+        logger.info("═══════════════════════════════════════════════════════════════");
+        logger.info("STEP 5: Creating Thread Pool (size: {})", threadPoolSize);
+        logger.info("═══════════════════════════════════════════════════════════════");
+        threadPool = Executors.newFixedThreadPool(threadPoolSize);
+
+        // Step 6: Start the server
+        long elapsed = System.currentTimeMillis() - startTime;
+        logger.info("═══════════════════════════════════════════════════════════════");
+        logger.info("HSpring WebServer started in {} ms on port {}", elapsed, port);
+        logger.info("═══════════════════════════════════════════════════════════════");
+        
+        startServer();
     }
 
     /**
-     * Sends an HTTP response to the client.
-     *
-     * @param writer        the PrintWriter to write the response.
-     * @param statusCode    the HTTP status code.
-     * @param statusMessage the HTTP status message.
-     * @param contentType   the content type of the response (e.g., JSON, HTML).
-     * @param body          the response body.
+     * Prints a fancy startup banner.
      */
-    public static void sendResponse(PrintWriter writer, int statusCode, String statusMessage, String contentType, String body) {
-        writer.printf("HTTP/1.1 %d %s\r\n", statusCode, statusMessage);
-        writer.printf("Content-Type: %s\r\n", contentType);
-        writer.printf("Content-Length: %d\r\n", body.length());
-        writer.println("Connection: close\r\n");
-        writer.print(body);
+    private void printBanner() {
+        String banner = """
+                
+                ╔═══════════════════════════════════════════════════════════╗
+                ║                                                           ║
+                ║   ██╗  ██╗███████╗██████╗ ██████╗ ██╗███╗   ██╗ ██████╗   ║
+                ║   ██║  ██║██╔════╝██╔══██╗██╔══██╗██║████╗  ██║██╔════╝   ║
+                ║   ███████║███████╗██████╔╝██████╔╝██║██╔██╗ ██║██║  ███╗  ║
+                ║   ██╔══██║╚════██║██╔═══╝ ██╔══██╗██║██║╚██╗██║██║   ██║  ║
+                ║   ██║  ██║███████║██║     ██║  ██║██║██║ ╚████║╚██████╔╝  ║
+                ║   ╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝   ║
+                ║                                                           ║
+                ║   HSpring Framework - by Harendra                         ║
+                ║   Learn Spring Boot Internals                             ║
+                ║   Version: 1.0.0                                          ║
+                ║                                                           ║
+                ╚═══════════════════════════════════════════════════════════╝
+                """;
+        System.out.println(banner);
     }
 
     /**
-     * Starts the web server and listens for client connections.
-     *
-     * @param threadPool the thread pool for handling client requests concurrently.
+     * Starts the server socket and accepts connections.
      */
-    private void startServer(ExecutorService threadPool) {
-
-        try (ServerSocket serverSocket = new ServerSocket(PORT)) {
-            logger.info("Web Server is running on port {}", PORT);
-            while (true) {
+    private void startServer() {
+        running = true;
+        
+        try {
+            serverSocket = new ServerSocket(port);
+            serverSocket.setSoTimeout(0); // No timeout for accept()
+            
+            logger.info("Server listening on http://localhost:{}", port);
+            
+            while (running) {
                 try {
-                    // Accept new client connections
                     Socket clientSocket = serverSocket.accept();
-                    logger.info("New client connected: {}", clientSocket.getInetAddress());
-                    serverSocket.setSoTimeout(900000); // Timeout for server socket
-
-                    // Handle client request in a separate thread
-                    threadPool.execute(() -> handleClientRequest(clientSocket));
-                } catch (IOException ex) {
-                    logger.error("Error Occurred in Accept new client connections", ex);
-                    break;
+                    threadPool.execute(() -> handleRequest(clientSocket));
+                } catch (IOException e) {
+                    if (running) {
+                        logger.error("Error accepting connection", e);
+                    }
                 }
             }
-        } catch (IOException ex) {
-            logger.error("Error Occurred in starting server ", ex);
+        } catch (IOException e) {
+            logger.error("Failed to start server on port {}", port, e);
         }
     }
 
     /**
-     * Handles an individual client request.
-     *
-     * @param clientSocket the client socket.
+     * Handles a single HTTP request.
+     * This method demonstrates the complete request lifecycle.
+     * 
+     * @param clientSocket The client socket connection
      */
-    public void handleClientRequest(Socket clientSocket) {
+    private void handleRequest(Socket clientSocket) {
+        HttpRequest request = null;
+        HttpResponse response = null;
+        Exception occuredException = null;
+
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
              PrintWriter writer = new PrintWriter(clientSocket.getOutputStream(), true)) {
 
-            // Read the request line (e.g., "GET / HTTP/1.1")
+            // Parse the request line
             String requestLine = reader.readLine();
-            if (requestLine == null) return;
-
-            logger.info("Request: " + requestLine);
-
-            // Parse request line into method and URI
-            String[] requestParts = requestLine.split(" ");
-            if (requestParts.length < 2) {
-                sendErrorResponse(writer, 400, "Bad Request", "text/html");
+            if (requestLine == null || requestLine.isEmpty()) {
                 return;
             }
 
-            String method = requestParts[0];
-            String uri = requestParts[1];
+            // Create HttpRequest object (parses headers and body)
+            request = new HttpRequest(requestLine, reader);
+            response = new HttpResponse(writer);
 
-            // Create route resolver instance
-            RouteResolver routeResolver = new RouteResolver();
-
-            // Resolve the route and handle the request
-            boolean routeResolved = routeResolver.resolve(method, uri, reader, writer);
-
-            // If no route found, send a 404 error
-            if (!routeResolved) {
-                sendErrorResponse(writer, 404, "Not Found", "text/html");
+            // Apply pre-handle filters
+            if (!filterChain.applyPreHandle(request, response)) {
+                // Filter short-circuited the request
+                return;
             }
 
-        } catch (IOException e) {
-            logger.error("Error in handel client request method ", e);
+            // Route the request to the appropriate controller
+            boolean routeFound = routeResolver.resolve(request, response);
+
+            if (!routeFound) {
+                response.status(HttpResponse.NOT_FOUND)
+                        .json("{\"error\": \"Not Found\", \"message\": \"No handler found for " + 
+                              request.getMethod() + " " + request.getPath() + "\", \"status\": 404}");
+            }
+
+            // Apply post-handle filters
+            filterChain.applyPostHandle(request, response);
+
+        } catch (Exception e) {
+            occuredException = e;
+            logger.error("Error handling request", e);
+            
+            // Use exception handler if response not yet sent
+            if (response != null && !response.isHeadersSent()) {
+                exceptionHandler.handleException(request, response, e);
+            }
         } finally {
+            // Apply after-completion filters (cleanup)
+            if (request != null && response != null) {
+                filterChain.applyAfterCompletion(request, response, occuredException);
+            }
+            
+            // Close the socket
             try {
                 clientSocket.close();
             } catch (IOException e) {
-                logger.error("Error in closing client socket ", e);
+                logger.error("Error closing client socket", e);
             }
         }
     }
 
     /**
-     * Determines the response format based on the Accept header.
-     *
-     * @param acceptHeader the value of the Accept header.
-     * @return the response format (e.g., JSON, HTML, or plain text).
+     * Adds a custom filter to the filter chain.
+     * 
+     * @param filter The filter to add
      */
-    private String determineResponseFormat(String acceptHeader) {
-        if (acceptHeader.contains("application/json")) {
-            return "application/json";
-        } else if (acceptHeader.contains("text/html")) {
-            return "text/html";
-        } else if (acceptHeader.contains("text/plain")) {
-            return "text/plain";
-        } else {
-            return "application/json";
+    public void addFilter(Filter filter) {
+        if (filterChain != null) {
+            filterChain.addFilter(filter);
         }
     }
 
+    /**
+     * Stops the server gracefully.
+     */
+    public void stop() {
+        running = false;
+        
+        if (serverSocket != null && !serverSocket.isClosed()) {
+            try {
+                serverSocket.close();
+            } catch (IOException e) {
+                logger.error("Error closing server socket", e);
+            }
+        }
+        
+        if (threadPool != null) {
+            threadPool.shutdown();
+        }
+        
+        if (applicationContext != null) {
+            applicationContext.close();
+        }
+        
+        logger.info("Server stopped");
+    }
 
+    /**
+     * Gets the ApplicationContext (IoC Container).
+     */
+    public ApplicationContext getApplicationContext() {
+        return applicationContext;
+    }
 }

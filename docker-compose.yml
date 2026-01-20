@@ -1,0 +1,25 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# HSpring Framework - Docker Compose
+# ═══════════════════════════════════════════════════════════════════════════════
+# 
+# Start the server: docker-compose up
+# Stop the server:  docker-compose down
+# View logs:        docker-compose logs -f
+
+version: '3.8'
+
+services:
+  hspring:
+    build: .
+    container_name: hspring-framework
+    ports:
+      - "8080:8080"
+    environment:
+      - JAVA_OPTS=-Xmx256m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
