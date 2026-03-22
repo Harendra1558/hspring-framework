@@ -455,10 +455,6 @@ Contributions are welcome! If you'd like to add features or improve documentatio
 3. Make your changes
 4. Submit a pull request
 
-## 📝 License
-
-This project is open source and available under the MIT License.
-
 ---
 
 **Author:** Harendra  
@@ -466,33 +462,6 @@ This project is open source and available under the MIT License.
 
 ---
 
-## 🌐 Host a Live Demo
-
-Want to share a live demo? Here are FREE hosting options:
-
-### Option 1: Railway (Easiest - 2 minutes)
-1. Go to [railway.app](https://railway.app) and sign in with GitHub
-2. Click "New Project" → "Deploy from GitHub repo"
-3. Select `hspring-framework`
-4. Railway auto-deploys! You get a URL like: `https://multithreadedwebserver.up.railway.app`
-
-### Option 2: Render
-1. Go to [render.com](https://render.com) and connect GitHub
-2. New Web Service → Select your repo
-3. Settings:
-   - **Build Command:** `mvn clean package -DskipTests`
-   - **Start Command:** `java -jar target/hspring-framework-1.0.0.jar`
-
-### Option 3: Build Executable JAR
-```bash
-# Build the JAR (includes all dependencies)
-mvn clean package -DskipTests
-
-# Run it anywhere Java 17+ is installed
-java -jar target/hspring-framework-1.0.0.jar
-```
-
----
 
 > 💡 **Tip:** The best way to learn is to add a breakpoint in `ApplicationContext.java` and step through the code during startup. Watch how beans are discovered, created, and wired together!
 
