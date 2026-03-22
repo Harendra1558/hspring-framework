@@ -1,4 +1,4 @@
-package com.project.MultiThreadedWebServer;
+package com.project.MultiThreadedWebServer.annotations;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

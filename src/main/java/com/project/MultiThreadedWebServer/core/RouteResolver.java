@@ -3,8 +3,8 @@ package com.project.MultiThreadedWebServer.core;
 import com.project.MultiThreadedWebServer.annotations.DeleteMapping;
 import com.project.MultiThreadedWebServer.annotations.PutMapping;
 import com.project.MultiThreadedWebServer.annotations.RestController;
-import com.project.MultiThreadedWebServer.GetMapping;
-import com.project.MultiThreadedWebServer.PostMapping;
+import com.project.MultiThreadedWebServer.annotations.GetMapping;
+import com.project.MultiThreadedWebServer.annotations.PostMapping;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

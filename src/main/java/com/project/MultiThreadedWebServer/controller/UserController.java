@@ -2,8 +2,8 @@ package com.project.MultiThreadedWebServer.controller;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.project.MultiThreadedWebServer.GetMapping;
-import com.project.MultiThreadedWebServer.PostMapping;
+import com.project.MultiThreadedWebServer.annotations.GetMapping;
+import com.project.MultiThreadedWebServer.annotations.PostMapping;
 import com.project.MultiThreadedWebServer.annotations.Autowired;
 import com.project.MultiThreadedWebServer.annotations.DeleteMapping;
 import com.project.MultiThreadedWebServer.annotations.PutMapping;

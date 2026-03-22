@@ -1,7 +1,7 @@
 package com.project.MultiThreadedWebServer.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.project.MultiThreadedWebServer.GetMapping;
+import com.project.MultiThreadedWebServer.annotations.GetMapping;
 import com.project.MultiThreadedWebServer.annotations.RestController;
 import com.project.MultiThreadedWebServer.core.HttpRequest;
 import com.project.MultiThreadedWebServer.core.HttpResponse;
