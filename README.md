@@ -1,467 +1,326 @@
 # 🚀 HSpring Framework
 
-A **lightweight implementation of Spring Boot internals** built from scratch in Java 17. This project demonstrates how Spring Boot works under the hood, making it perfect for learning and understanding the core concepts of the Spring Framework.
+**Learn Spring Boot Internals by Building One from Scratch.**
 
-> **📚 Educational Purpose:** This project is designed for developers who want to understand what happens "behind the scenes" when you use Spring Boot. Every class is heavily documented with explanations of the concepts.
+This is not a library. This is a **learning tool**. Every file implements a real Spring Boot concept — from `@SpringBootApplication` to `ResponseEntity<T>` — with detailed comments explaining *what* it does, *why* it exists, and *how* the real framework does it differently.
 
-## 📋 Table of Contents
+> **Who is this for?**  
+> Java developers who can *use* Spring Boot but want to understand *how* it works behind the `@` annotations.
 
-- [Overview](#-overview)
-- [Why This Project?](#-why-this-project)
-- [Features](#-features)
-- [Project Structure](#-project-structure)
-- [Core Concepts Explained](#-core-concepts-explained)
-- [How It Works](#-how-it-works)
-- [Getting Started](#-getting-started)
-- [API Documentation](#-api-documentation)
-- [Learning Path](#-learning-path)
-- [License](#-license)
+---
 
-## 🎯 Overview
+## ⚡ Quick Start (2 minutes)
 
-This project is a **mini Spring Boot framework** that implements the core concepts:
+```bash
+# 1. Clone
+git clone https://github.com/Harendra1558/hspring-framework.git
+cd hspring-framework
 
-| Concept | What It Does | Why It Matters |
-|---------|--------------|----------------|
-| **IoC Container** | Manages object creation and lifecycle | You don't manually create objects with `new` |
-| **Dependency Injection** | Automatically wires dependencies | Classes don't need to know how to find their dependencies |
-| **Web Server** | Handles HTTP connections with threads | Processes multiple requests concurrently |
-| **MVC Architecture** | Separates Controllers, Services, Routing | Clean, maintainable code structure |
-| **Annotations** | Declarative configuration | Configuration via metadata, not XML |
-| **Filters** | Intercepts requests/responses | Cross-cutting concerns (logging, auth) |
-| **Exception Handling** | Centralized error management | Consistent error responses |
+# 2. Build
+mvn clean compile
 
-## 🤔 Why This Project?
+# 3. Run
+mvn exec:java -Dexec.mainClass="com.project.MultiThreadedWebServer.Application"
 
-When you write a Spring Boot application, you typically write:
+# 4. Open browser
+# → http://localhost:8080
+```
 
+Or open the project in **IntelliJ IDEA** → Run `Application.java` → Visit `http://localhost:8080`.
+
+### Try the API
+
+```bash
+# Get a user (teaches: Path Variables + ResponseEntity)
+curl http://localhost:8080/api/users/1
+
+# Create a user (teaches: Request Body + Validation + 201 Created)
+curl -X POST http://localhost:8080/api/users \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Alice", "email": "alice@mail.com"}'
+
+# Delete a user (teaches: Exception Handling when user not found)
+curl -X DELETE http://localhost:8080/api/users/999
+```
+
+---
+
+## 📖 How to Learn from This Project
+
+### The Golden Rule
+
+> **Don't just read the code. Debug it.**  
+> Put a breakpoint on `ApplicationContext.java` line 118 (the constructor) and step through every method. Watch beans being created, configured, and wired together *in real-time*.
+
+### Learning Order (Read files in this exact sequence)
+
+The project is designed so each file builds on the previous one. Follow this path:
+
+---
+
+### 🔵 Phase 1: "What are annotations?" (10 min)
+
+Start here. Annotations are just labels — they do nothing by themselves.
+
+| # | File | You'll Learn |
+|---|------|------------|
+| 1 | [`annotations/Component.java`](src/main/java/com/project/MultiThreadedWebServer/annotations/Component.java) | How `@Target` and `@Retention` work. Why `RUNTIME` retention is required. |
+| 2 | [`annotations/Service.java`](src/main/java/com/project/MultiThreadedWebServer/annotations/Service.java) | That `@Service` is just `@Component` with a different name. Both do the same thing. |
+| 3 | [`annotations/RestController.java`](src/main/java/com/project/MultiThreadedWebServer/annotations/RestController.java) | That `@RestController` carries a `value()` for the base URL path. |
+
+**Key Takeaway:** Annotations are metadata. The *framework code* reads them using reflection and acts on them.
+
+---
+
+### 🟢 Phase 2: "How does Spring find my classes?" (15 min)
+
+This is where the magic starts — the IoC container.
+
+| # | File | You'll Learn |
+|---|------|------------|
+| 4 | [`core/ApplicationContext.java`](src/main/java/com/project/MultiThreadedWebServer/core/ApplicationContext.java) | **THE MOST IMPORTANT FILE.** The entire bean lifecycle in 6 steps. Read the constructor line by line. |
+
+**What to focus on in ApplicationContext:**
+
+```
+Step 0 → Load application.properties
+Step 1 → Component Scanning (find .class files, load via Class.forName)
+Step 2 → Bean Creation (call newInstance() via reflection)
+Step 3 → @Value Injection (read properties, set fields)
+Step 4 → @Autowired Injection (find matching bean, set field)
+Step 5 → @PostConstruct (call init methods)
+```
+
+**Debug exercise:** Add a breakpoint on Step 1, Step 2, and Step 4. Watch the `beansByType` map grow as beans are created, then watch fields get populated during injection.
+
+---
+
+### 🟡 Phase 3: "How does @Value and @Autowired work?" (15 min)
+
+Now see the injection happen — properties from files, objects from the container.
+
+| # | File | You'll Learn |
+|---|------|------------|
+| 5 | [`core/PropertiesLoader.java`](src/main/java/com/project/MultiThreadedWebServer/core/PropertiesLoader.java) | How `application.properties` is read from the classpath. |
+| 6 | [`annotations/Value.java`](src/main/java/com/project/MultiThreadedWebServer/annotations/Value.java) | The `@Value("key")` annotation definition. |
+| 7 | [`annotations/Autowired.java`](src/main/java/com/project/MultiThreadedWebServer/annotations/Autowired.java) | The `@Autowired` annotation definition. |
+| 8 | [`annotations/Qualifier.java`](src/main/java/com/project/MultiThreadedWebServer/annotations/Qualifier.java) | How `@Qualifier` resolves ambiguity (type-based vs name-based lookup). |
+| 9 | [`service/UserService.java`](src/main/java/com/project/MultiThreadedWebServer/service/UserService.java) | **See it in action:** `@Value`, `@PostConstruct`, `@PreDestroy` all in one class. |
+
+**Key experiment:** In `UserService`, try moving the `createUser()` calls from `@PostConstruct init()` into the constructor. Run the app. You'll see `defaultRole` is `null` in the constructor but `"USER"` in `@PostConstruct`. That's the whole point!
+
+---
+
+### 🟠 Phase 4: "How does @Configuration + @Bean work?" (10 min)
+
+How to register third-party objects (like Jackson's ObjectMapper) as beans.
+
+| # | File | You'll Learn |
+|---|------|------------|
+| 10 | [`annotations/Configuration.java`](src/main/java/com/project/MultiThreadedWebServer/annotations/Configuration.java) | The `@Configuration` annotation. |
+| 11 | [`annotations/Bean.java`](src/main/java/com/project/MultiThreadedWebServer/annotations/Bean.java) | The `@Bean` annotation. |
+| 12 | [`config/AppConfig.java`](src/main/java/com/project/MultiThreadedWebServer/config/AppConfig.java) | Factory method that creates a configured `ObjectMapper`. The return value becomes a bean. |
+
+**Why this matters:** You can't put `@Component` on classes you don't own (library code). `@Bean` solves this.
+
+---
+
+### 🔴 Phase 5: "How do HTTP requests reach my controller?" (20 min)
+
+URL matching, request parsing, and the `ResponseEntity` return pattern.
+
+| # | File | You'll Learn |
+|---|------|------------|
+| 13 | [`core/HttpRequest.java`](src/main/java/com/project/MultiThreadedWebServer/core/HttpRequest.java) | How raw HTTP text is parsed into method, path, headers, query params, body. |
+| 14 | [`core/HttpResponse.java`](src/main/java/com/project/MultiThreadedWebServer/core/HttpResponse.java) | How response status + headers + body are written back to the socket. |
+| 15 | [`core/ResponseEntity.java`](src/main/java/com/project/MultiThreadedWebServer/core/ResponseEntity.java) | Spring's `ResponseEntity<T>` — wraps body + status code. Controllers return this instead of writing manually. |
+| 16 | [`core/RouteResolver.java`](src/main/java/com/project/MultiThreadedWebServer/core/RouteResolver.java) | How `/api/users/{id}` becomes a regex, how path variables are extracted, and how `ResponseEntity` return values are auto-serialized to JSON. |
+
+**Key concept:** The `RouteResolver.invokeHandler()` method checks if the controller returns `ResponseEntity` or `void`. If it returns `ResponseEntity`, the framework auto-serializes the body to JSON. This is how Spring's `@ResponseBody` works!
+
+---
+
+### 🟣 Phase 6: "How does the whole app start?" (15 min)
+
+The entry point — equivalent to `SpringApplication.run()`.
+
+| # | File | You'll Learn |
+|---|------|------------|
+| 17 | [`annotations/SpringBootApplication.java`](src/main/java/com/project/MultiThreadedWebServer/annotations/SpringBootApplication.java) | The meta-annotation that combines `@Configuration` + `@ComponentScan` + `@EnableAutoConfiguration`. |
+| 18 | [`Application.java`](src/main/java/com/project/MultiThreadedWebServer/Application.java) | Your main class. Just `@SpringBootApplication` + `main()` — exactly like real Spring Boot. |
+| 19 | [`core/HSpringApplication.java`](src/main/java/com/project/MultiThreadedWebServer/core/HSpringApplication.java) | The orchestrator. Creates IoC container, routes, filters, and embedded server — like `SpringApplication`. |
+| 20 | [`WebServer.java`](src/main/java/com/project/MultiThreadedWebServer/WebServer.java) | Pure embedded server (like Tomcat). Only handles TCP/HTTP. No `main()`, no IoC, no annotations. |
+
+**Compare with real Spring Boot:**
+```
+ Real Spring Boot                         HSpring
+ ─────────────────                        ───────
+ MyApp.java                        →   Application.java
+   @SpringBootApplication                  @SpringBootApplication
+   main() { SpringApplication.run() }      main() { HSpringApplication.run() }
+
+ SpringApplication                  →   HSpringApplication
+   Creates ApplicationContext              Creates ApplicationContext
+   Creates TomcatWebServer                 Creates WebServer
+
+ TomcatWebServer                    →   WebServer
+   Just handles HTTP                       Just handles HTTP
+   No app logic, no DI                     No app logic, no DI
+```
+
+---
+
+### ⚪ Phase 7: "What about controllers?" (10 min)
+
+Now see everything come together in actual endpoints.
+
+| # | File | You'll Learn |
+|---|------|------------|
+| 21 | [`model/User.java`](src/main/java/com/project/MultiThreadedWebServer/model/User.java) | Why POJOs are better than `Map<String, Object>`. Type-safe domain modeling. |
+| 22 | [`controller/UserController.java`](src/main/java/com/project/MultiThreadedWebServer/controller/UserController.java) | **The Spring way:** methods return `ResponseEntity.ok(body)` and `ResponseEntity.created(body)`. Framework auto-serializes. |
+| 23 | [`controller/HomeController.java`](src/main/java/com/project/MultiThreadedWebServer/controller/HomeController.java) | The `void(req, resp)` style for HTML responses. Shows `@Value` injection for app name/version. |
+
+**Notice the difference:**
 ```java
-@RestController
-public class UserController {
-    
-    @Autowired
-    private UserService userService;
-    
-    @GetMapping("/users/{id}")
-    public User getUser(@PathVariable Long id) {
-        return userService.findById(id);
-    }
+// HomeController (HTML — uses void style)
+public void home(HttpRequest req, HttpResponse resp) {
+    resp.html("<h1>Hello</h1>");
+}
+
+// UserController (JSON — uses ResponseEntity style, like real Spring!)
+public ResponseEntity<?> getUser(HttpRequest req) {
+    User user = service.getUserById(id);
+    return ResponseEntity.ok(user);  // Auto-serialized to JSON!
 }
 ```
 
-But have you ever wondered:
-- **How does `@Autowired` magically inject the service?**
-- **How does `@GetMapping` know which method to call?**
-- **How does `{id}` get extracted from the URL?**
-- **Where does the `UserService` instance come from?**
+---
 
-This project answers all these questions by implementing them from scratch!
+### ⚫ Phase 8: "Filters and Error Handling" (10 min)
 
-## ✨ Features
+Cross-cutting concerns — things that happen on *every* request.
 
-| Feature | Description | Spring Equivalent |
-|---------|-------------|-------------------|
-| `ApplicationContext` | IoC Container that manages beans | `ApplicationContext` |
-| `@Component` | Marks a class as a managed bean | `@Component` |
-| `@Service` | Marks a service layer class | `@Service` |
-| `@RestController` | Marks a REST API controller | `@RestController` |
-| `@Autowired` | Injects dependencies automatically | `@Autowired` |
-| `@GetMapping` | Maps HTTP GET requests | `@GetMapping` |
-| `@PostMapping` | Maps HTTP POST requests | `@PostMapping` |
-| `@PutMapping` | Maps HTTP PUT requests | `@PutMapping` |
-| `@DeleteMapping` | Maps HTTP DELETE requests | `@DeleteMapping` |
-| Path Variables | `/users/{id}` pattern matching | `@PathVariable` |
-| Query Parameters | `?key=value` parsing | `@RequestParam` |
-| `Filter` | Request/Response interceptors | `Filter` / `HandlerInterceptor` |
-| `GlobalExceptionHandler` | Centralized exception handling | `@ControllerAdvice` |
-| `HttpRequest` | Request wrapper | `HttpServletRequest` |
-| `HttpResponse` | Response wrapper | `HttpServletResponse` |
+| # | File | You'll Learn |
+|---|------|------------|
+| 24 | [`filter/Filter.java`](src/main/java/com/project/MultiThreadedWebServer/filter/Filter.java) | The filter interface — `preHandle()` and `postHandle()`. |
+| 25 | [`filter/FilterChain.java`](src/main/java/com/project/MultiThreadedWebServer/filter/FilterChain.java) | How multiple filters are executed in order (and reversed for post-handle). |
+| 26 | [`filter/LoggingFilter.java`](src/main/java/com/project/MultiThreadedWebServer/filter/LoggingFilter.java) | Logs request duration using `ThreadLocal` for thread-safety. |
+| 27 | [`exception/GlobalExceptionHandler.java`](src/main/java/com/project/MultiThreadedWebServer/exception/GlobalExceptionHandler.java) | Like `@ControllerAdvice` — catches exceptions and returns proper error JSON. |
+
+---
+
+## 🧠 All 16 Spring Boot Concepts in One Table
+
+| # | Concept | HSpring File | Real Spring Equivalent |
+|---|---------|-------------|----------------------|
+| 1 | `@SpringBootApplication` | `annotations/SpringBootApplication.java` | `@SpringBootApplication` |
+| 2 | `SpringApplication.run()` | `core/HSpringApplication.java` | `SpringApplication` |
+| 3 | IoC Container | `core/ApplicationContext.java` | `ApplicationContext` |
+| 4 | Component Scanning | `ApplicationContext.scanPackage()` | `@ComponentScan` |
+| 5 | `@Autowired` | `annotations/Autowired.java` | `@Autowired` |
+| 6 | `@Qualifier` | `annotations/Qualifier.java` | `@Qualifier` |
+| 7 | `@Value` | `annotations/Value.java` | `@Value` |
+| 8 | `@Configuration` + `@Bean` | `config/AppConfig.java` | `@Configuration` + `@Bean` |
+| 9 | `@PostConstruct` | `annotations/PostConstruct.java` | `@PostConstruct` |
+| 10 | `@PreDestroy` | `annotations/PreDestroy.java` | `@PreDestroy` |
+| 11 | `ResponseEntity<T>` | `core/ResponseEntity.java` | `ResponseEntity` |
+| 12 | Auto-serialization | `RouteResolver.invokeHandler()` | `@ResponseBody` + `HttpMessageConverter` |
+| 13 | Route Mapping | `core/RouteResolver.java` | `DispatcherServlet` + `HandlerMapping` |
+| 14 | Filter Chain | `filter/FilterChain.java` | `Filter` / `HandlerInterceptor` |
+| 15 | Exception Handler | `exception/GlobalExceptionHandler.java` | `@ControllerAdvice` |
+| 16 | Externalized Config | `application.properties` | `application.properties` |
+| 17 | Embedded Server | `WebServer.java` | `TomcatWebServer` / `JettyWebServer` |
+
+---
 
 ## 📁 Project Structure
 
 ```
 src/main/java/com/project/MultiThreadedWebServer/
 │
-├── WebServer.java              # 🚀 MAIN ENTRY POINT
-│                               # Like SpringApplication.run()
-│                               # Bootstraps the entire framework
+├── Application.java                   # 🚀 YOUR MAIN CLASS — @SpringBootApplication + main()
+├── WebServer.java                     # 🌐 EMBEDDED SERVER — like Tomcat (only HTTP/TCP code)
 │
-├── Client.java                 # 🧪 Test client for API testing
+├── annotations/                       # 📝 All custom annotations
+│   ├── SpringBootApplication.java     # Meta-annotation (combines scanning + config)
+│   ├── Component.java                 # General managed bean
+│   ├── Service.java                   # Service layer marker
+│   ├── RestController.java            # REST controller marker
+│   ├── Configuration.java             # Java config class marker
+│   ├── Bean.java                      # Factory method marker
+│   ├── Autowired.java                 # Dependency injection
+│   ├── Qualifier.java                 # Bean disambiguation
+│   ├── Value.java                     # Property injection
+│   ├── PostConstruct.java             # Init after injection
+│   ├── PreDestroy.java                # Cleanup on shutdown
+│   ├── GetMapping.java                # HTTP GET route
+│   ├── PostMapping.java               # HTTP POST route
+│   ├── PutMapping.java                # HTTP PUT route
+│   └── DeleteMapping.java             # HTTP DELETE route
 │
-├── annotations/                # 📝 CUSTOM ANNOTATIONS
-│   │                           # These are markers that the framework reads
-│   ├── Component.java          # Marks any managed bean
-│   ├── Service.java            # Marks service layer (business logic)
-│   ├── RestController.java     # Marks REST controllers
-│   ├── Autowired.java          # Marks fields for dependency injection
-│   ├── PutMapping.java         # Maps PUT requests
-│   └── DeleteMapping.java      # Maps DELETE requests
+├── core/                              # 🔧 Framework engine (the internals)
+│   ├── HSpringApplication.java        # THE ORCHESTRATOR — like SpringApplication.run()
+│   ├── ApplicationContext.java        # IoC container — THE HEART
+│   ├── PropertiesLoader.java          # Reads application.properties
+│   ├── RouteResolver.java             # URL → controller method mapping
+│   ├── ResponseEntity.java            # Response wrapper (status + body)
+│   ├── HttpRequest.java               # Parses incoming HTTP
+│   └── HttpResponse.java              # Builds outgoing HTTP
 │
-├── core/                       # 🔧 FRAMEWORK CORE
-│   │                           # The "engine" that makes everything work
-│   ├── ApplicationContext.java # IoC Container - creates & manages beans
-│   ├── RouteResolver.java      # Maps URLs to controller methods
-│   ├── HttpRequest.java        # Wraps incoming HTTP request data
-│   └── HttpResponse.java       # Wraps outgoing HTTP response
+├── config/                            # ⚙️ @Configuration classes
+│   └── AppConfig.java                 # Defines ObjectMapper @Bean
 │
-├── controller/                 # 🎮 REST CONTROLLERS
-│   │                           # Handle incoming HTTP requests
-│   ├── HomeController.java     # Home page & health check
-│   └── UserController.java     # User CRUD operations
+├── model/                             # 📦 Domain objects
+│   └── User.java                      # User POJO
 │
-├── service/                    # 💼 SERVICE LAYER
-│   │                           # Business logic lives here
-│   └── UserService.java        # User-related operations
+├── controller/                        # 🎮 REST controllers
+│   ├── UserController.java            # Returns ResponseEntity (Spring way!)
+│   └── HomeController.java            # Returns HTML (shows @Value)
 │
-├── filter/                     # 🔍 REQUEST FILTERS
-│   │                           # Intercept requests before/after controller
-│   ├── Filter.java             # Interface defining filter contract
-│   ├── FilterChain.java        # Manages multiple filters
-│   └── LoggingFilter.java      # Logs request/response details
+├── service/                           # 💼 Business logic
+│   └── UserService.java               # @Value + @PostConstruct + @PreDestroy
 │
-├── exception/                  # ⚠️ EXCEPTION HANDLING
-│   │                           # Centralized error handling
-│   ├── GlobalExceptionHandler.java  # Catches all exceptions
-│   ├── NotFoundException.java       # 404 errors
-│   ├── ValidationException.java     # Validation errors
-│   └── UnauthorizedException.java   # 401 errors
+├── filter/                            # 🔍 Request interceptors
+│   ├── Filter.java                    # Filter interface
+│   ├── FilterChain.java               # Filter orchestration
+│   └── LoggingFilter.java             # Logs request/response
 │
-├── GetMapping.java             # @GetMapping annotation
-└── PostMapping.java            # @PostMapping annotation
+└── exception/                         # ⚠️ Error handling
+    ├── GlobalExceptionHandler.java     # Like @ControllerAdvice
+    ├── NotFoundException.java          # 404 error
+    ├── ValidationException.java        # 400 error
+    └── UnauthorizedException.java      # 401 error
+
+src/main/resources/
+└── application.properties              # server.port, app.name, user.default-role
 ```
 
-## 🧠 Core Concepts Explained
-
-### 1. IoC Container (Inversion of Control)
-
-**The Problem:**
-```java
-// Without IoC - YOU create and manage objects
-public class UserController {
-    private UserService userService = new UserService();  // Tight coupling!
-    private EmailService emailService = new EmailService();
-    // What if UserService needs EmailService? Complex dependencies!
-}
-```
-
-**The Solution (IoC):**
-```java
-// With IoC - The CONTAINER creates and manages objects
-@RestController
-public class UserController {
-    @Autowired
-    private UserService userService;  // Container injects this!
-}
-```
-
-**How our ApplicationContext works:**
-```java
-public class ApplicationContext {
-    private Map<Class<?>, Object> beans = new HashMap<>();
-    
-    public ApplicationContext(String basePackage) {
-        // STEP 1: Scan for annotated classes
-        List<Class<?>> classes = scanPackage(basePackage);
-        
-        // STEP 2: Create instances (beans)
-        for (Class<?> clazz : classes) {
-            if (hasComponentAnnotation(clazz)) {
-                Object instance = clazz.newInstance();
-                beans.put(clazz, instance);
-            }
-        }
-        
-        // STEP 3: Inject dependencies
-        for (Object bean : beans.values()) {
-            for (Field field : bean.getClass().getDeclaredFields()) {
-                if (field.isAnnotationPresent(Autowired.class)) {
-                    Object dependency = beans.get(field.getType());
-                    field.set(bean, dependency);  // Inject!
-                }
-            }
-        }
-    }
-}
-```
-
-### 2. Route Resolution (How URLs map to methods)
-
-**The Problem:**
-When a request comes in for `GET /users/123`, how does the framework know to call `UserController.getUserById()`?
-
-**The Solution:**
-```java
-// Pattern: /users/{id}
-// Converted to Regex: /users/([^/]+)
-// When /users/123 arrives:
-//   1. Matches the regex
-//   2. Captures "123" as "id"
-//   3. Calls getUserById with id="123"
-
-@GetMapping("/users/{id}")
-public void getUserById(HttpRequest request, HttpResponse response) {
-    String id = request.getPathVariable("id");  // "123"
-}
-```
-
-### 3. Filter Chain (Cross-cutting concerns)
-
-**The Problem:**
-You want to log every request, check authentication, and measure response time. Do you add this to EVERY controller method?
-
-**The Solution:**
-```java
-// Filters run BEFORE and AFTER every request
-public class LoggingFilter implements Filter {
-    @Override
-    public boolean preHandle(HttpRequest request, HttpResponse response) {
-        System.out.println("Request: " + request.getPath());
-        return true;  // Continue processing
-    }
-    
-    @Override
-    public void postHandle(HttpRequest request, HttpResponse response) {
-        System.out.println("Response sent!");
-    }
-}
-```
-
-**Execution Order:**
-```
-Request → Filter1.pre → Filter2.pre → Controller → Filter2.post → Filter1.post → Response
-```
-
-## 🔄 How It Works
-
-### Request Lifecycle (What happens when you hit an endpoint)
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  CLIENT                                                                 │
-│    │                                                                    │
-│    │  HTTP Request: GET /api/users/123                                 │
-│    ▼                                                                    │
-├─────────────────────────────────────────────────────────────────────────┤
-│  THREAD POOL                                                            │
-│    │                                                                    │
-│    │  Worker thread picks up the connection                            │
-│    ▼                                                                    │
-├─────────────────────────────────────────────────────────────────────────┤
-│  HTTP PARSER                                                            │
-│    │                                                                    │
-│    │  Creates HttpRequest object with:                                 │
-│    │    - method: "GET"                                                │
-│    │    - path: "/api/users/123"                                       │
-│    │    - headers, body, etc.                                          │
-│    ▼                                                                    │
-├─────────────────────────────────────────────────────────────────────────┤
-│  FILTER CHAIN (preHandle)                                               │
-│    │                                                                    │
-│    │  LoggingFilter: Logs "Incoming GET /api/users/123"               │
-│    │  AuthFilter: Checks authentication (if configured)               │
-│    ▼                                                                    │
-├─────────────────────────────────────────────────────────────────────────┤
-│  ROUTE RESOLVER                                                         │
-│    │                                                                    │
-│    │  Pattern: /api/users/{id} matches /api/users/123                  │
-│    │  Extracts: id = "123"                                             │
-│    │  Found: UserController.getUserById()                              │
-│    ▼                                                                    │
-├─────────────────────────────────────────────────────────────────────────┤
-│  CONTROLLER                                                             │
-│    │                                                                    │
-│    │  UserController.getUserById(request, response)                    │
-│    │    └── userService.getUserById(123)  // @Autowired service       │
-│    │         └── Returns user data                                     │
-│    ▼                                                                    │
-├─────────────────────────────────────────────────────────────────────────┤
-│  FILTER CHAIN (postHandle)                                              │
-│    │                                                                    │
-│    │  LoggingFilter: Logs "Response 200 in 5ms"                       │
-│    ▼                                                                    │
-├─────────────────────────────────────────────────────────────────────────┤
-│  HTTP RESPONSE                                                          │
-│    │                                                                    │
-│    │  Writes to socket:                                                │
-│    │    HTTP/1.1 200 OK                                                │
-│    │    Content-Type: application/json                                 │
-│    │    {"id": 123, "name": "John"}                                    │
-│    ▼                                                                    │
-├─────────────────────────────────────────────────────────────────────────┤
-│  CLIENT                                                                 │
-│    │                                                                    │
-│    │  Receives JSON response                                           │
-│    ▼                                                                    │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Server Startup (What happens when you run the application)
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  STEP 1: WebServer.run() called                                         │
-│          The journey begins...                                          │
-└────────────────────────────────┬────────────────────────────────────────┘
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  STEP 2: Create ApplicationContext                                      │
-│          - Scans "com.project.MultiThreadedWebServer" package          │
-│          - Finds: UserController, HomeController, UserService          │
-│          - Creates instances of each                                    │
-│          - Injects @Autowired dependencies                             │
-└────────────────────────────────┬────────────────────────────────────────┘
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  STEP 3: Create RouteResolver                                           │
-│          For each controller, scan methods:                             │
-│          - @GetMapping("/")           → HomeController.home()          │
-│          - @GetMapping("/health")     → HomeController.healthCheck()   │
-│          - @GetMapping("/api/users")  → UserController.getAllUsers()   │
-│          - etc...                                                       │
-└────────────────────────────────┬────────────────────────────────────────┘
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  STEP 4: Create FilterChain                                             │
-│          - Add LoggingFilter                                            │
-│          - (Add more filters as needed)                                 │
-└────────────────────────────────┬────────────────────────────────────────┘
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  STEP 5: Create Thread Pool                                             │
-│          - Fixed pool of 10 worker threads                              │
-│          - Ready to handle concurrent requests                          │
-└────────────────────────────────┬────────────────────────────────────────┘
-                                 ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  STEP 6: Start ServerSocket                                             │
-│          - Binds to port 8080                                           │
-│          - Enters infinite loop: accept() → handle → repeat             │
-│          - Server is now running! 🎉                                    │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- **Java 17** or higher
-- **Maven 3.6+**
-
-### Build & Run
-
-```bash
-# Clone the repository
-git clone https://github.com/Harendra1558/hspring-framework.git
-cd hspring-framework
-
-# Build the project
-mvn clean compile
-
-# Run the server
-mvn exec:java -Dexec.mainClass="com.project.MultiThreadedWebServer.WebServer"
-
-# In another terminal, run the test client
-mvn exec:java -Dexec.mainClass="com.project.MultiThreadedWebServer.Client"
-```
-
-### Or Run from IDE
-1. Open the project in IntelliJ IDEA / Eclipse / VS Code
-2. Run `WebServer.java` as main class
-3. Open `http://localhost:8080` in your browser
-
-You should see a beautiful documentation page!
-
-## 📚 API Documentation
-
-### Base URL: `http://localhost:8080`
-
-| Method | Endpoint | Description | Example |
-|--------|----------|-------------|---------|
-| GET | `/` | Home page with API docs | `curl http://localhost:8080/` |
-| GET | `/health` | Health check with system info | `curl http://localhost:8080/health` |
-| GET | `/api/users` | List all users | `curl http://localhost:8080/api/users` |
-| GET | `/api/users?limit=5` | List users with limit | `curl http://localhost:8080/api/users?limit=5` |
-| GET | `/api/users/{id}` | Get user by ID | `curl http://localhost:8080/api/users/1` |
-| POST | `/api/users` | Create new user | See below |
-| PUT | `/api/users/{id}` | Update user | See below |
-| DELETE | `/api/users/{id}` | Delete user | `curl -X DELETE http://localhost:8080/api/users/1` |
-
-### Example Requests
-
-**Create User:**
-```bash
-curl -X POST http://localhost:8080/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"name": "John Doe", "email": "john@example.com"}'
-```
-
-**Update User:**
-```bash
-curl -X PUT http://localhost:8080/api/users/1 \
-  -H "Content-Type: application/json" \
-  -d '{"name": "John Updated", "email": "john.updated@example.com"}'
-```
-
-## 📖 Learning Path
-
-If you're new to this project, read the source files in this order:
-
-### Step 1: Understand Annotations
-1. `annotations/Component.java` - What makes a class a "bean"?
-2. `annotations/Service.java` - Specialized component for business logic
-3. `annotations/RestController.java` - Specialized component for HTTP endpoints
-4. `annotations/Autowired.java` - How dependency injection is requested
-
-### Step 2: Understand the IoC Container
-5. `core/ApplicationContext.java` - **THE MOST IMPORTANT FILE**
-   - How beans are discovered
-   - How beans are created
-   - How dependencies are injected
-
-### Step 3: Understand HTTP Handling
-6. `core/HttpRequest.java` - How HTTP requests are parsed
-7. `core/HttpResponse.java` - How HTTP responses are built
-8. `core/RouteResolver.java` - How URLs map to methods
-
-### Step 4: Understand the Web Server
-9. `WebServer.java` - How everything is bootstrapped and connected
-
-### Step 5: See It In Action
-10. `controller/UserController.java` - Real controller using all features
-11. `service/UserService.java` - Business logic layer
-
-### Step 6: Understand Cross-cutting Concerns
-12. `filter/Filter.java` - Filter interface
-13. `filter/FilterChain.java` - How filters are orchestrated
-14. `exception/GlobalExceptionHandler.java` - Centralized error handling
+---
 
 ## 🛠️ Tech Stack
 
-| Technology | Purpose | Version |
-|------------|---------|---------|
-| Java | Programming language | 17 |
-| Maven | Build & dependency management | 3.6+ |
-| Jackson | JSON serialization/deserialization | 2.13.4 |
-| SLF4J + Logback | Logging | 2.0.16 / 1.5.15 |
-| Java Reflection API | Annotation processing & DI | Built-in |
-| Java NIO | Network I/O | Built-in |
+| Technology | Purpose |
+|------------|---------|
+| Java 17 | Language (records, text blocks, pattern matching) |
+| Maven | Build & dependency management |
+| Jackson | JSON serialization (`ObjectMapper`) |
+| SLF4J + Logback | Logging |
+| Java Reflection API | Annotation processing, DI, bean creation |
+| Java ServerSocket | Raw TCP networking (no Tomcat) |
+
+---
 
 ## 🤝 Contributing
 
-Contributions are welcome! If you'd like to add features or improve documentation:
+Want to add a new Spring Boot concept? Follow the rules:
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
----
-
-**Author:** Harendra  
-**GitHub:** [github.com/Harendra1558](https://github.com/Harendra1558)
+1. **One concept per file** — don't combine multiple ideas
+2. **No duplicate features** — if GET already exists, don't add another GET
+3. **Heavy documentation** — explain *why*, not just *what*
+4. **Keep it simple** — this is for learning, not production
 
 ---
 
+**Author:** [Harendra](https://github.com/Harendra1558)
 
-> 💡 **Tip:** The best way to learn is to add a breakpoint in `ApplicationContext.java` and step through the code during startup. Watch how beans are discovered, created, and wired together!
-
+> 💡 **Best way to learn:** Put a breakpoint on `ApplicationContext.java` line 118 → step through every method → watch beans being created, configured, and wired together in real-time!

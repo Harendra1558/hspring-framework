@@ -1,5 +1,6 @@
 package com.project.MultiThreadedWebServer.core;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.project.MultiThreadedWebServer.annotations.DeleteMapping;
 import com.project.MultiThreadedWebServer.annotations.PutMapping;
 import com.project.MultiThreadedWebServer.annotations.RestController;
@@ -34,12 +35,25 @@ import java.util.regex.Pattern;
  *   │  HTTP Method + URL Pattern                  →   Handler Method           │
  *   ├───────────────────────────────────────────────────────────────────────────┤
  *   │  GET /                                      →   HomeController.home()    │
- *   │  GET /api/users                             →   UserController.getAll()  │
  *   │  GET /api/users/{id}                        →   UserController.getById() │
  *   │  POST /api/users                            →   UserController.create()  │
- *   │  PUT /api/users/{id}                        →   UserController.update()  │
  *   │  DELETE /api/users/{id}                     →   UserController.delete()  │
  *   └───────────────────────────────────────────────────────────────────────────┘
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * SUPPORTED CONTROLLER METHOD SIGNATURES (from least to most Spring-like)
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
+ * 1. void method(HttpRequest, HttpResponse)    — Manual control (old style)
+ * 2. ResponseEntity<T> method(HttpRequest)     — Spring-like: return ResponseEntity
+ * 3. Object method(HttpRequest)                — Spring-like: auto-wrap in 200 OK
+ * 
+ * When a method returns ResponseEntity or Object, the framework:
+ *   → Reads the status code from ResponseEntity (or defaults to 200)
+ *   → Auto-serializes the body to JSON using ObjectMapper
+ *   → Sends the complete HTTP response
+ * 
+ * This is EXACTLY what Spring's @ResponseBody / @RestController does!
  * 
  * ═══════════════════════════════════════════════════════════════════════════════
  * HOW PATH VARIABLES WORK
@@ -55,66 +69,17 @@ import java.util.regex.Pattern;
  * 
  * HOW WE MATCH:
  * 1. Convert pattern "/api/users/{id}" to regex "/api/users/([^/]+)"
- *    - {id} becomes ([^/]+) which means "capture one or more non-slash characters"
- * 
  * 2. When request "/api/users/123" arrives, match against regex
- *    - Regex matches!
- *    - Capture group 1 contains "123"
- * 
- * 3. Map capture groups to variable names
- *    - Variable names: ["id"]
- *    - Captured values: ["123"]
- *    - Result: {"id": "123"}
- * 
- * 4. Set path variables on the HttpRequest object
- *    - request.setPathVariable("id", "123")
- * 
- * 5. Controller can now access:
- *    - request.getPathVariable("id") → "123"
- * 
- * ═══════════════════════════════════════════════════════════════════════════════
- * ROUTE REGISTRATION PROCESS (At startup)
- * ═══════════════════════════════════════════════════════════════════════════════
- * 
- * When a controller is registered, we:
- * 
- * 1. Get all methods in the controller class
- * 2. For each method, check for route annotations
- * 3. Extract the URL pattern from the annotation
- * 4. Convert pattern to regex (for path variable matching)
- * 5. Store the route info for later lookup
- * 
- * Example:
- *   @RestController("/api")
- *   public class UserController {
- *       @GetMapping("/users/{id}")
- *       public void getUser(...) { }
- *   }
- *   
- *   Results in:
- *     - HTTP Method: GET
- *     - Pattern: /api/users/{id}
- *     - Regex: ^/api/users/([^/]+)$
- *     - Variables: ["id"]
- *     - Handler: UserController.getUser()
+ * 3. Capture group 1 contains "123"
+ * 4. Map: {"id" → "123"}
+ * 5. Set on request: request.setPathVariable("id", "123")
  */
 public class RouteResolver {
 
     private static final Logger logger = LoggerFactory.getLogger(RouteResolver.class);
 
     /**
-     * ═══════════════════════════════════════════════════════════════════════════
-     * ROUTE INFO RECORD
-     * ═══════════════════════════════════════════════════════════════════════════
-     * 
-     * This record holds all information about a single route.
-     * Using Java 17 record for conciseness (immutable data carrier).
-     * 
-     * @param pattern    Original pattern from annotation: "/api/users/{id}"
-     * @param regex      Compiled regex for matching: Pattern.compile("^/api/users/([^/]+)$")
-     * @param paramNames List of path variable names in order: ["id"]
-     * @param controller The controller instance that handles this route
-     * @param method     The specific method to invoke
+     * Route info record — holds all information about a single route.
      */
     private record RouteInfo(
             String pattern,
@@ -124,42 +89,37 @@ public class RouteResolver {
             Method method
     ) {}
 
-    /**
-     * Routes organized by HTTP method.
-     * 
-     * Structure:
-     *   "GET"    → [RouteInfo1, RouteInfo2, ...]
-     *   "POST"   → [RouteInfo3, RouteInfo4, ...]
-     *   "PUT"    → [RouteInfo5, ...]
-     *   "DELETE" → [RouteInfo6, ...]
-     * 
-     * Using ConcurrentHashMap for thread-safety.
-     */
+    /** Routes organized by HTTP method. */
     private final Map<String, List<RouteInfo>> routes = new ConcurrentHashMap<>();
 
-    /**
-     * Regex pattern to find path variables like {id} in URL patterns.
-     * 
-     * \\{     → Match literal {
-     * ([^/]+) → Capture group: one or more characters that aren't /
-     * \\}     → Match literal }
-     * 
-     * Examples matches:
-     *   "{id}"        → captures "id"
-     *   "{userId}"    → captures "userId"
-     *   "{post-id}"   → captures "post-id"
-     */
+    /** Regex pattern to find path variables like {id} in URL patterns. */
     private static final Pattern PATH_VARIABLE_PATTERN = Pattern.compile("\\{([^/]+)\\}");
 
     /**
-     * Creates a new RouteResolver with empty route maps.
+     * ObjectMapper for auto-serializing ResponseEntity bodies to JSON.
+     * 
+     * In real Spring, this is part of the HttpMessageConverter system.
+     * We keep it simple: any return value gets serialized to JSON.
+     */
+    private ObjectMapper objectMapper;
+
+    /**
+     * Creates a new RouteResolver.
      */
     public RouteResolver() {
-        // Initialize route lists for each HTTP method
         routes.put("GET", new ArrayList<>());
         routes.put("POST", new ArrayList<>());
         routes.put("PUT", new ArrayList<>());
         routes.put("DELETE", new ArrayList<>());
+        this.objectMapper = new ObjectMapper();
+    }
+
+    /**
+     * Sets the ObjectMapper used for auto-serialization.
+     * Called by WebServer after the IoC container creates the @Bean ObjectMapper.
+     */
+    public void setObjectMapper(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -178,17 +138,10 @@ public class RouteResolver {
      *    - Combine basePath + annotation path
      *    - Convert to regex pattern
      *    - Store in routes map
-     * 
-     * @param controller The controller instance to scan
      */
     public void registerController(Object controller) {
         Class<?> clazz = controller.getClass();
         
-        // ─────────────────────────────────────────────────────────────────────────
-        // STEP 1: Get base path from @RestController annotation
-        // @RestController("/api") → basePath = "/api"
-        // @RestController → basePath = ""
-        // ─────────────────────────────────────────────────────────────────────────
         String basePath = "";
         if (clazz.isAnnotationPresent(RestController.class)) {
             basePath = clazz.getAnnotation(RestController.class).value();
@@ -201,30 +154,19 @@ public class RouteResolver {
             logger.info("  Base path: {}", basePath);
         }
 
-        // ─────────────────────────────────────────────────────────────────────────
-        // STEP 2: Scan all methods for route annotations
-        // ─────────────────────────────────────────────────────────────────────────
         for (Method method : clazz.getDeclaredMethods()) {
-            
-            // Check for @GetMapping
             if (method.isAnnotationPresent(GetMapping.class)) {
                 String path = basePath + method.getAnnotation(GetMapping.class).value();
                 registerRoute("GET", path, controller, method);
             }
-            
-            // Check for @PostMapping
             if (method.isAnnotationPresent(PostMapping.class)) {
                 String path = basePath + method.getAnnotation(PostMapping.class).value();
                 registerRoute("POST", path, controller, method);
             }
-            
-            // Check for @PutMapping
             if (method.isAnnotationPresent(PutMapping.class)) {
                 String path = basePath + method.getAnnotation(PutMapping.class).value();
                 registerRoute("PUT", path, controller, method);
             }
-            
-            // Check for @DeleteMapping
             if (method.isAnnotationPresent(DeleteMapping.class)) {
                 String path = basePath + method.getAnnotation(DeleteMapping.class).value();
                 registerRoute("DELETE", path, controller, method);
@@ -233,136 +175,70 @@ public class RouteResolver {
     }
 
     /**
-     * Registers a single route.
-     * 
-     * ═══════════════════════════════════════════════════════════════════════════
-     * PATTERN TO REGEX CONVERSION
-     * ═══════════════════════════════════════════════════════════════════════════
-     * 
-     * Input:  /api/users/{id}/posts/{postId}
-     * 
-     * Process:
-     * 1. Find all {variableName} patterns
-     * 2. Replace each with capturing group ([^/]+)
-     * 3. Quote literal parts to escape special regex chars
-     * 4. Add anchors ^ and $
-     * 
-     * Output: ^/api/users/([^/]+)/posts/([^/]+)$
-     * 
-     * Also extract variable names in order: ["id", "postId"]
-     * 
-     * @param httpMethod HTTP method (GET, POST, etc.)
-     * @param pattern    URL pattern (e.g., "/users/{id}")
-     * @param controller Controller instance
-     * @param method     Handler method
+     * Registers a single route — converts URL pattern to regex.
      */
     private void registerRoute(String httpMethod, String pattern, Object controller, Method method) {
-        // ─────────────────────────────────────────────────────────────────────────
-        // Extract path variable names and build regex pattern
-        // ─────────────────────────────────────────────────────────────────────────
         List<String> paramNames = new ArrayList<>();
         Matcher matcher = PATH_VARIABLE_PATTERN.matcher(pattern);
         
-        // Build the regex pattern
-        StringBuilder regexBuilder = new StringBuilder("^");  // Start anchor
+        StringBuilder regexBuilder = new StringBuilder("^");
         int lastEnd = 0;
         
         while (matcher.find()) {
-            // ─────────────────────────────────────────────────────────────────────
-            // For each {variableName} found:
-            // 1. Append the literal part before it (quoted to escape special chars)
-            // 2. Append ([^/]+) to capture the variable value
-            // 3. Record the variable name
-            // ─────────────────────────────────────────────────────────────────────
-            
-            // Append literal text before this variable (e.g., "/api/users/")
             String literalPart = pattern.substring(lastEnd, matcher.start());
             regexBuilder.append(Pattern.quote(literalPart));
-            
-            // Append capturing group: ([^/]+) matches one or more non-slash chars
             regexBuilder.append("([^/]+)");
-            
-            // Record the variable name (e.g., "id" from "{id}")
             paramNames.add(matcher.group(1));
-            
             lastEnd = matcher.end();
         }
         
-        // Append remaining literal part after last variable
         regexBuilder.append(Pattern.quote(pattern.substring(lastEnd)));
-        regexBuilder.append("$");  // End anchor
+        regexBuilder.append("$");
         
-        // Compile the regex pattern
         Pattern regex = Pattern.compile(regexBuilder.toString());
-        
-        // Create RouteInfo and add to routes
         RouteInfo routeInfo = new RouteInfo(pattern, regex, paramNames, controller, method);
         routes.get(httpMethod).add(routeInfo);
         
-        // Log the registered route
-        logger.info("  {} {} → {}.{}()", 
+        // Log return type to show which style is used
+        String returnType = method.getReturnType().getSimpleName();
+        String style = returnType.equals("void") ? "(manual response)" : "(auto-serialized → " + returnType + ")";
+        
+        logger.info("  {} {} → {}.{}() {}", 
                 httpMethod, 
                 pattern, 
                 controller.getClass().getSimpleName(), 
-                method.getName());
+                method.getName(),
+                style);
     }
 
     /**
      * Resolves a request to a handler and executes it.
-     * 
-     * ═══════════════════════════════════════════════════════════════════════════
-     * RESOLUTION PROCESS
-     * ═══════════════════════════════════════════════════════════════════════════
-     * 
-     * 1. Get the HTTP method from request (GET, POST, etc.)
-     * 2. Get the list of routes for that method
-     * 3. For each route:
-     *    a. Match request path against route's regex
-     *    b. If match found:
-     *       - Extract path variables from capture groups
-     *       - Set path variables on request object
-     *       - Invoke the handler method
-     *       - Return true
-     * 4. If no route matches, return false (will trigger 404)
-     * 
-     * @param request  The HTTP request
-     * @param response The HTTP response
-     * @return true if a route was found and executed, false otherwise
      */
     public boolean resolve(HttpRequest request, HttpResponse response) {
         String httpMethod = request.getMethod();
         String path = request.getPath();
 
-        // Get routes for this HTTP method
         List<RouteInfo> methodRoutes = routes.get(httpMethod);
         if (methodRoutes == null) {
             logger.warn("Unsupported HTTP method: {}", httpMethod);
             return false;
         }
 
-        // Try to match each registered route
         for (RouteInfo routeInfo : methodRoutes) {
             Matcher matcher = routeInfo.regex().matcher(path);
             
             if (matcher.matches()) {
-                // ─────────────────────────────────────────────────────────────────
-                // MATCH FOUND! Extract path variables and invoke handler.
-                // ─────────────────────────────────────────────────────────────────
-                
                 // Extract path variables from regex capture groups
-                // Group 0 is the entire match; groups 1, 2, ... are captures
                 for (int i = 0; i < routeInfo.paramNames().size(); i++) {
                     String paramName = routeInfo.paramNames().get(i);
-                    String paramValue = matcher.group(i + 1);  // +1 because group 0 is full match
+                    String paramValue = matcher.group(i + 1);
                     request.setPathVariable(paramName, paramValue);
                 }
 
-                // Invoke the handler method
                 return invokeHandler(routeInfo, request, response);
             }
         }
 
-        // No matching route found
         logger.debug("No route found for {} {}", httpMethod, path);
         return false;
     }
@@ -371,76 +247,119 @@ public class RouteResolver {
      * Invokes the handler method with appropriate parameters.
      * 
      * ═══════════════════════════════════════════════════════════════════════════
-     * HANDLER INVOCATION
+     * HANDLER INVOCATION — THE HEART OF @RestController
      * ═══════════════════════════════════════════════════════════════════════════
      * 
-     * Controller methods can have different signatures:
+     * This method supports MULTIPLE controller method signatures, progressing
+     * from "manual" to "Spring-like":
      * 
-     * 1. (HttpRequest, HttpResponse) - Full access to request and response
-     *    @GetMapping("/users")
-     *    public void getUsers(HttpRequest request, HttpResponse response)
+     * ┌─────────────────────────────────────────────────────────────────────────┐
+     * │  STYLE 1: Manual (old way)                                              │
+     * │  void getUser(HttpRequest request, HttpResponse response)              │
+     * │  → Developer manually builds JSON and calls response.json()            │
+     * │                                                                         │
+     * │  STYLE 2: ResponseEntity (Spring way!)                                 │
+     * │  ResponseEntity<User> getUser(HttpRequest request)                     │
+     * │  → Return ResponseEntity.ok(user), framework does the rest!            │
+     * │                                                                         │
+     * │  STYLE 3: Direct return (Spring @ResponseBody way!)                    │
+     * │  User getUser(HttpRequest request)                                     │
+     * │  → Return object directly, framework wraps in 200 OK + JSON            │
+     * └─────────────────────────────────────────────────────────────────────────┘
      * 
-     * 2. (HttpResponse) - Simple endpoints that only need to send response
-     *    @GetMapping("/health")
-     *    public void health(HttpResponse response)
-     * 
-     * We detect the signature and invoke appropriately.
-     * 
-     * @param routeInfo Route information including controller and method
-     * @param request   The HTTP request
-     * @param response  The HTTP response
-     * @return true if invocation succeeded
+     * In real Spring, @RestController = @Controller + @ResponseBody.
+     * @ResponseBody means "serialize the return value as the response body."
+     * Styles 2 and 3 above implement this exact behavior!
      */
     private boolean invokeHandler(RouteInfo routeInfo, HttpRequest request, HttpResponse response) {
         try {
             Method method = routeInfo.method();
             Object controller = routeInfo.controller();
-
-            // Determine parameter types and invoke accordingly
             Class<?>[] paramTypes = method.getParameterTypes();
-            
+
+            Object result;
+
+            // ─────────────────────────────────────────────────────────────────────
+            // Invoke the method based on its parameter signature
+            // ─────────────────────────────────────────────────────────────────────
             if (paramTypes.length == 2 && 
                 paramTypes[0] == HttpRequest.class && 
                 paramTypes[1] == HttpResponse.class) {
-                // Signature: method(HttpRequest request, HttpResponse response)
+                // STYLE 1: void method(HttpRequest, HttpResponse) — manual
                 method.invoke(controller, request, response);
-                
+                return true;  // Developer already handled the response
+
+            } else if (paramTypes.length == 1 && 
+                       paramTypes[0] == HttpRequest.class) {
+                // STYLE 2 & 3: method(HttpRequest) → returns something
+                result = method.invoke(controller, request);
+
             } else if (paramTypes.length == 1 && 
                        paramTypes[0] == HttpResponse.class) {
-                // Signature: method(HttpResponse response)
+                // Legacy: method(HttpResponse)
                 method.invoke(controller, response);
-                
+                return true;
+
             } else if (paramTypes.length == 0) {
-                // Signature: method() - rare but supported
-                Object result = method.invoke(controller);
-                if (result instanceof String) {
-                    response.json((String) result);
-                }
+                // No-arg method
+                result = method.invoke(controller);
+
             } else {
                 logger.warn("Unsupported method signature for: {}.{}", 
                         controller.getClass().getSimpleName(), 
                         method.getName());
                 return false;
             }
-            
+
+            // ─────────────────────────────────────────────────────────────────────
+            // AUTO-SERIALIZE THE RETURN VALUE (The @ResponseBody magic!)
+            //
+            // This is what makes @RestController special in Spring:
+            //   - The return value is automatically converted to JSON
+            //   - The HTTP status code is read from ResponseEntity (or defaults to 200)
+            //   - The response is sent to the client
+            // ─────────────────────────────────────────────────────────────────────
+            if (result != null) {
+                if (result instanceof ResponseEntity<?> responseEntity) {
+                    // ResponseEntity — extract status + body, auto-serialize
+                    int statusCode = responseEntity.getStatusCode();
+                    Object body = responseEntity.getBody();
+
+                    response.status(statusCode);
+
+                    if (body != null) {
+                        if (body instanceof String str) {
+                            response.json(str);
+                        } else {
+                            // AUTO-SERIALIZATION: Object → JSON string
+                            // This is what HttpMessageConverter does in real Spring!
+                            String json = objectMapper.writeValueAsString(body);
+                            response.json(json);
+                        }
+                    } else {
+                        response.status(statusCode).send("");
+                    }
+
+                } else if (result instanceof String str) {
+                    // Raw string return — send as JSON
+                    response.json(str);
+                } else {
+                    // Any other object — auto-serialize to JSON with 200 OK
+                    String json = objectMapper.writeValueAsString(result);
+                    response.json(json);
+                }
+            }
+
             return true;
             
         } catch (Exception e) {
             logger.error("Error invoking handler method", e);
-            // Re-throw so GlobalExceptionHandler can catch it
             throw new RuntimeException("Handler invocation failed", e);
         }
     }
 
     /**
      * Gets all registered routes for debugging/documentation.
-     * 
-     * Returns a map like:
-     *   "GET" → [
-     *     "/api/users → UserController.getAllUsers",
-     *     "/api/users/{id} → UserController.getUserById"
-     *   ],
-     *   "POST" → [...]
      */
     public Map<String, List<String>> getRegisteredRoutes() {
         Map<String, List<String>> result = new HashMap<>();

@@ -1,17 +1,16 @@
 package com.project.MultiThreadedWebServer.controller;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.project.MultiThreadedWebServer.annotations.GetMapping;
 import com.project.MultiThreadedWebServer.annotations.PostMapping;
 import com.project.MultiThreadedWebServer.annotations.Autowired;
 import com.project.MultiThreadedWebServer.annotations.DeleteMapping;
-import com.project.MultiThreadedWebServer.annotations.PutMapping;
 import com.project.MultiThreadedWebServer.annotations.RestController;
 import com.project.MultiThreadedWebServer.core.HttpRequest;
-import com.project.MultiThreadedWebServer.core.HttpResponse;
+import com.project.MultiThreadedWebServer.core.ResponseEntity;
 import com.project.MultiThreadedWebServer.exception.ValidationException;
+import com.project.MultiThreadedWebServer.model.User;
 import com.project.MultiThreadedWebServer.service.UserService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,232 +18,185 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * UserController demonstrates a full RESTful API controller.
+ * ╔══════════════════════════════════════════════════════════════════════════════╗
+ * ║                           USER CONTROLLER                                    ║
+ * ║          (REST API — NOW USES ResponseEntity LIKE REAL SPRING!)              ║
+ * ╚══════════════════════════════════════════════════════════════════════════════╝
  * 
- * This showcases:
- * 1. @RestController annotation for auto-discovery
- * 2. @Autowired for dependency injection
- * 3. @GetMapping, @PostMapping, @PutMapping, @DeleteMapping
- * 4. Path variables: /users/{id}
- * 5. Query parameters: /users?limit=10
- * 6. Request body parsing
- * 7. JSON responses
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * BEFORE (Old Way — Manual response building):
+ *   public void getUser(HttpRequest req, HttpResponse resp) {
+ *       User user = userService.findById(id);
+ *       String json = mapper.writeValueAsString(user);
+ *       resp.status(200).json(json);  // Manual!
+ *   }
  * 
- * API Endpoints:
- * - GET    /api/users          - List all users
- * - GET    /api/users/{id}     - Get user by ID
- * - POST   /api/users          - Create new user
- * - PUT    /api/users/{id}     - Update user
- * - DELETE /api/users/{id}     - Delete user
+ * AFTER (Spring Way — Return ResponseEntity):
+ *   public ResponseEntity<?> getUser(HttpRequest req) {
+ *       User user = userService.findById(id);
+ *       return ResponseEntity.ok(user);  // Auto-serialized!
+ *   }
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
+ * Notice:
+ *   1. Method RETURNS ResponseEntity — doesn't manually build response
+ *   2. Method takes only HttpRequest — no HttpResponse needed!
+ *   3. Framework auto-serializes the body object to JSON
+ *   4. Status code is embedded in ResponseEntity
+ * 
+ * Each endpoint teaches a DIFFERENT concept:
+ * 
+ * ┌───────────────────────────────────────────────────────────────────────────────┐
+ * │  Endpoint                │  Concept Taught                                   │
+ * ├───────────────────────────┼─────────────────────────────────────────────────┤
+ * │  GET  /api/users/{id}    │  Path Variables + ResponseEntity.ok()            │
+ * │  POST /api/users         │  Request Body + ResponseEntity.created()         │
+ * │  DELETE /api/users/{id}  │  Exception flow + ResponseEntity.ok()            │
+ * └───────────────────────────────────────────────────────────────────────────────┘
  */
 @RestController("/api")
 public class UserController {
 
     private static final Logger logger = LoggerFactory.getLogger(UserController.class);
-    private static final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * @Autowired — UserService is automatically injected by the IoC container.
+     */
     @Autowired
     private UserService userService;
 
     /**
-     * GET /api/users - List all users
+     * @Autowired — ObjectMapper from AppConfig's @Bean method.
+     * Used to parse request bodies (deserialization).
      * 
-     * Query parameters:
-     * - limit: Maximum number of users to return (optional)
+     * Note: We still need ObjectMapper for READING request bodies.
+     * The framework auto-serializes RESPONSES (via ResponseEntity),
+     * but we still manually deserialize REQUEST bodies.
+     * 
+     * In real Spring, @RequestBody does this automatically.
      */
-    @GetMapping("/users")
-    public void getAllUsers(HttpRequest request, HttpResponse response) {
-        try {
-            // Demonstrate query parameter usage
-            String limitStr = request.getQueryParam("limit");
-            
-            Map<Long, Map<String, Object>> users = userService.getAllUsers();
-            
-            // Apply limit if specified
-            if (limitStr != null) {
-                int limit = Integer.parseInt(limitStr);
-                Map<Long, Map<String, Object>> limited = new HashMap<>();
-                int count = 0;
-                for (Map.Entry<Long, Map<String, Object>> entry : users.entrySet()) {
-                    if (count >= limit) break;
-                    limited.put(entry.getKey(), entry.getValue());
-                    count++;
-                }
-                users = limited;
-            }
-
-            // Build response
-            Map<String, Object> responseBody = new HashMap<>();
-            responseBody.put("success", true);
-            responseBody.put("count", users.size());
-            responseBody.put("data", users.values());
-
-            response.status(HttpResponse.OK).json(objectMapper.writeValueAsString(responseBody));
-            
-        } catch (Exception e) {
-            logger.error("Error fetching users", e);
-            response.sendError(HttpResponse.INTERNAL_SERVER_ERROR, "Failed to fetch users");
-        }
-    }
+    @Autowired
+    private ObjectMapper objectMapper;
 
     /**
-     * GET /api/users/{id} - Get user by ID
+     * GET /api/users/{id} — Demonstrates Path Variable + ResponseEntity.
      * 
-     * Path variables:
-     * - id: The user ID
+     * ═══════════════════════════════════════════════════════════════════════════
+     * COMPARE: Old way vs Spring way
+     * ═══════════════════════════════════════════════════════════════════════════
+     * 
+     * OLD WAY:
+     *   public void getUser(HttpRequest req, HttpResponse resp) {
+     *       User user = service.getUserById(id);
+     *       Map<String, Object> body = Map.of("success", true, "data", user);
+     *       resp.status(200).json(mapper.writeValueAsString(body));
+     *   }
+     * 
+     * SPRING WAY (what we use now):
+     *   public ResponseEntity<?> getUser(HttpRequest request) {
+     *       User user = service.getUserById(id);
+     *       return ResponseEntity.ok(Map.of("success", true, "data", user));
+     *   }
+     * 
+     * The framework reads the ResponseEntity, serializes the body Map to JSON,
+     * sets status 200, and sends the response. You just return!
      */
     @GetMapping("/users/{id}")
-    public void getUserById(HttpRequest request, HttpResponse response) {
-        try {
-            // Extract path variable
-            String idStr = request.getPathVariable("id");
-            Long id = Long.parseLong(idStr);
+    public ResponseEntity<?> getUserById(HttpRequest request) {
+        String idStr = request.getPathVariable("id");
+        Long id = Long.parseLong(idStr);
 
-            // Fetch user (throws NotFoundException if not found)
-            Map<String, Object> user = userService.getUserById(id);
+        User user = userService.getUserById(id);
 
-            // Build response
-            Map<String, Object> responseBody = new HashMap<>();
-            responseBody.put("success", true);
-            responseBody.put("data", user);
+        Map<String, Object> body = new HashMap<>();
+        body.put("success", true);
+        body.put("data", user);
 
-            response.status(HttpResponse.OK).json(objectMapper.writeValueAsString(responseBody));
-            
-        } catch (NumberFormatException e) {
-            throw new ValidationException("id", "User ID must be a valid number");
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        return ResponseEntity.ok(body);
     }
 
     /**
-     * POST /api/users - Create new user
+     * POST /api/users — Demonstrates Request Body + ResponseEntity.created().
      * 
-     * Request body (JSON):
-     * {
-     *   "name": "John Doe",
-     *   "email": "john@example.com"
-     * }
+     * ═══════════════════════════════════════════════════════════════════════════
+     * CONCEPT: REQUEST BODY PARSING + 201 CREATED
+     * ═══════════════════════════════════════════════════════════════════════════
+     * 
+     * When a client sends:
+     *   POST /api/users
+     *   Content-Type: application/json
+     *   {"name": "John", "email": "john@mail.com"}
+     * 
+     * We:
+     * 1. Read the raw body string from HttpRequest
+     * 2. Deserialize JSON → User object (in real Spring: @RequestBody does this)
+     * 3. Validate required fields
+     * 4. Return ResponseEntity.created(newUser)  ← 201 status!
+     * 
+     * Note: ResponseEntity.created() sets status 201 instead of 200.
+     * In real Spring, 201 means "a new resource was created."
      */
     @PostMapping("/users")
-    public void createUser(HttpRequest request, HttpResponse response) {
-        try {
-            // Parse request body
-            String body = request.getBody();
-            if (body == null || body.isEmpty()) {
-                throw new ValidationException("body", "Request body is required");
-            }
-
-            Map<String, String> userData = objectMapper.readValue(body, new TypeReference<Map<String, String>>() {});
-
-            // Validate required fields
-            String name = userData.get("name");
-            String email = userData.get("email");
-            
-            if (name == null || name.trim().isEmpty()) {
-                throw new ValidationException("name", "Name is required");
-            }
-            if (email == null || !email.contains("@")) {
-                throw new ValidationException("email", "Valid email is required");
-            }
-
-            // Create user
-            Map<String, Object> newUser = userService.createUser(name.trim(), email.trim());
-
-            // Build response
-            Map<String, Object> responseBody = new HashMap<>();
-            responseBody.put("success", true);
-            responseBody.put("message", "User created successfully");
-            responseBody.put("data", newUser);
-
-            response.status(HttpResponse.CREATED).json(objectMapper.writeValueAsString(responseBody));
-            
-        } catch (ValidationException e) {
-            throw e;
-        } catch (Exception e) {
-            logger.error("Error creating user", e);
-            response.sendError(HttpResponse.BAD_REQUEST, "Invalid request body");
+    public ResponseEntity<?> createUser(HttpRequest request) throws Exception {
+        // Read raw JSON body from request
+        String body = request.getBody();
+        if (body == null || body.isEmpty()) {
+            throw new ValidationException("body", "Request body is required");
         }
+
+        // Deserialize JSON into User object
+        // In real Spring, @RequestBody User userData does this automatically!
+        User userData = objectMapper.readValue(body, User.class);
+
+        // Validate required fields
+        if (userData.getName() == null || userData.getName().trim().isEmpty()) {
+            throw new ValidationException("name", "Name is required");
+        }
+        if (userData.getEmail() == null || !userData.getEmail().contains("@")) {
+            throw new ValidationException("email", "Valid email is required");
+        }
+
+        // Create user via service
+        User newUser = userService.createUser(userData.getName().trim(), userData.getEmail().trim());
+
+        // Return 201 Created — NOT 200 OK!
+        // This is the correct HTTP status for resource creation.
+        Map<String, Object> responseBody = new HashMap<>();
+        responseBody.put("success", true);
+        responseBody.put("message", "User created successfully");
+        responseBody.put("data", newUser);
+
+        return ResponseEntity.created(responseBody);
     }
 
     /**
-     * PUT /api/users/{id} - Update user
+     * DELETE /api/users/{id} — Demonstrates Exception Flow.
      * 
-     * Path variables:
-     * - id: The user ID
+     * ═══════════════════════════════════════════════════════════════════════════
+     * CONCEPT: EXCEPTION HANDLING + CLEAN CONTROLLER
+     * ═══════════════════════════════════════════════════════════════════════════
      * 
-     * Request body (JSON):
-     * {
-     *   "name": "Updated Name",
-     *   "email": "updated@example.com"
-     * }
-     */
-    @PutMapping("/users/{id}")
-    public void updateUser(HttpRequest request, HttpResponse response) {
-        try {
-            // Extract path variable
-            String idStr = request.getPathVariable("id");
-            Long id = Long.parseLong(idStr);
-
-            // Parse request body
-            String body = request.getBody();
-            Map<String, String> userData = objectMapper.readValue(body, new TypeReference<Map<String, String>>() {});
-
-            String name = userData.get("name");
-            String email = userData.get("email");
-
-            // Validate email if provided
-            if (email != null && !email.contains("@")) {
-                throw new ValidationException("email", "Valid email is required");
-            }
-
-            // Update user
-            Map<String, Object> updatedUser = userService.updateUser(id, name, email);
-
-            // Build response
-            Map<String, Object> responseBody = new HashMap<>();
-            responseBody.put("success", true);
-            responseBody.put("message", "User updated successfully");
-            responseBody.put("data", updatedUser);
-
-            response.status(HttpResponse.OK).json(objectMapper.writeValueAsString(responseBody));
-            
-        } catch (NumberFormatException e) {
-            throw new ValidationException("id", "User ID must be a valid number");
-        } catch (ValidationException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    /**
-     * DELETE /api/users/{id} - Delete user
+     * If the user doesn't exist, UserService.deleteUser() throws NotFoundException.
+     * That exception propagates up to GlobalExceptionHandler (like @ControllerAdvice)
+     * which formats a proper 404 JSON error response automatically.
      * 
-     * Path variables:
-     * - id: The user ID
+     * Notice how clean the controller code is:
+     * - No try/catch needed for business exceptions
+     * - The framework handles error formatting
+     * - Controller only contains the "happy path"
      */
     @DeleteMapping("/users/{id}")
-    public void deleteUser(HttpRequest request, HttpResponse response) {
-        try {
-            // Extract path variable
-            String idStr = request.getPathVariable("id");
-            Long id = Long.parseLong(idStr);
+    public ResponseEntity<?> deleteUser(HttpRequest request) {
+        String idStr = request.getPathVariable("id");
+        Long id = Long.parseLong(idStr);
 
-            // Delete user
-            userService.deleteUser(id);
+        // May throw NotFoundException → handled by GlobalExceptionHandler
+        userService.deleteUser(id);
 
-            // Build response
-            Map<String, Object> responseBody = new HashMap<>();
-            responseBody.put("success", true);
-            responseBody.put("message", "User deleted successfully");
+        Map<String, Object> body = new HashMap<>();
+        body.put("success", true);
+        body.put("message", "User deleted successfully");
 
-            response.status(HttpResponse.OK).json(objectMapper.writeValueAsString(responseBody));
-            
-        } catch (NumberFormatException e) {
-            throw new ValidationException("id", "User ID must be a valid number");
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        return ResponseEntity.ok(body);
     }
 }

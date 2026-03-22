@@ -1,16 +1,11 @@
 package com.project.MultiThreadedWebServer;
 
-import com.project.MultiThreadedWebServer.core.ApplicationContext;
 import com.project.MultiThreadedWebServer.core.HttpRequest;
 import com.project.MultiThreadedWebServer.core.HttpResponse;
 import com.project.MultiThreadedWebServer.core.RouteResolver;
 import com.project.MultiThreadedWebServer.exception.GlobalExceptionHandler;
 import com.project.MultiThreadedWebServer.filter.Filter;
 import com.project.MultiThreadedWebServer.filter.FilterChain;
-import com.project.MultiThreadedWebServer.filter.LoggingFilter;
-import com.project.MultiThreadedWebServer.controller.HomeController;
-import com.project.MultiThreadedWebServer.controller.UserController;
-import com.project.MultiThreadedWebServer.service.UserService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,72 +21,90 @@ import java.util.concurrent.Executors;
 /**
  * ╔══════════════════════════════════════════════════════════════════════════════╗
  * ║                         HSPRING WEB SERVER                                   ║
- * ║              Harendra's Spring Boot Implementation                           ║
+ * ║           (Embedded HTTP Server — Like Tomcat / Jetty / Netty)              ║
  * ╚══════════════════════════════════════════════════════════════════════════════╝
  * 
- * HSpring is a lightweight implementation of Spring Boot internals, created by
- * Harendra to demonstrate how the Spring Framework works under the hood.
+ * This class is ONLY the HTTP server — it has NO application logic, NO IoC,
+ * NO routing setup, NO main() method. It's just a network server.
  * 
- * This class demonstrates how Spring Boot works internally:
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * REAL SPRING BOOT ARCHITECTURE
+ * ═══════════════════════════════════════════════════════════════════════════════
  * 
- * 1. APPLICATION CONTEXT (IoC Container)
- *    - Scans for @Component, @Service, @RestController annotations
- *    - Creates and manages bean instances
- *    - Performs dependency injection via @Autowired
+ * In real Spring Boot, the server (Tomcat) is SEPARATE from your application:
  * 
- * 2. ROUTE RESOLVER (DispatcherServlet + HandlerMapping)
- *    - Maps URL patterns to controller methods
- *    - Supports path variables: /users/{id}
- *    - Handles GET, POST, PUT, DELETE methods
+ * ┌─────────────────────────────────────────────────────────────────────────────┐
+ * │  Application.java (@SpringBootApplication)                                  │
+ * │      ↓                                                                      │
+ * │  SpringApplication.run()                                                    │
+ * │      ↓                                                                      │
+ * │  Creates ApplicationContext (IoC, DI, scanning)                             │
+ * │      ↓                                                                      │
+ * │  Creates TomcatWebServer (just server code)                                 │
+ * │      ↓                                                                      │
+ * │  Tomcat.start() → listening for HTTP on port 8080                          │
+ * └─────────────────────────────────────────────────────────────────────────────┘
  * 
- * 3. FILTER CHAIN (Interceptors)
- *    - Pre-processing: logging, authentication, rate limiting
- *    - Post-processing: response modification, cleanup
+ * In HSpring:
  * 
- * 4. EXCEPTION HANDLER (ControllerAdvice)
- *    - Centralized exception handling
- *    - Consistent error responses
+ * ┌─────────────────────────────────────────────────────────────────────────────┐
+ * │  Application.java (@SpringBootApplication)                                  │
+ * │      ↓                                                                      │
+ * │  HSpringApplication.run()                                                   │
+ * │      ↓                                                                      │
+ * │  Creates ApplicationContext (IoC, DI, scanning)                             │
+ * │      ↓                                                                      │
+ * │  Creates WebServer (this class — just server code!)                         │
+ * │      ↓                                                                      │
+ * │  WebServer.start() → listening for HTTP on port 8080                       │
+ * └─────────────────────────────────────────────────────────────────────────────┘
  * 
- * 5. HTTP REQUEST/RESPONSE WRAPPERS
- *    - Parsed request with easy access to headers, body, params
- *    - Fluent response builder with status, headers, body
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * WHAT THIS CLASS DOES (AND DOESN'T DO)
+ * ═══════════════════════════════════════════════════════════════════════════════
  * 
- * LIFECYCLE OF A REQUEST:
- * ┌─────────────────────────────────────────────────────────────────────┐
- * │  Client Request                                                     │
- * │       ↓                                                             │
- * │  ServerSocket.accept() → New Socket Connection                     │
- * │       ↓                                                             │
- * │  ThreadPool → Allocate Worker Thread                               │
- * │       ↓                                                             │
- * │  Parse HTTP → Create HttpRequest object                            │
- * │       ↓                                                             │
- * │  FilterChain.preHandle() → Logging, Auth, etc.                     │
- * │       ↓                                                             │
- * │  RouteResolver.resolve() → Find matching route                     │
- * │       ↓                                                             │
- * │  Controller Method → Business logic execution                       │
- * │       ↓                                                             │
- * │  FilterChain.postHandle() → Post-processing                        │
- * │       ↓                                                             │
- * │  HttpResponse.send() → Write response to socket                    │
- * │       ↓                                                             │
- * │  Socket.close() → Connection closed                                │
- * └─────────────────────────────────────────────────────────────────────┘
+ * ✓ Opens a ServerSocket and listens for TCP connections
+ * ✓ Uses a thread pool to handle requests concurrently
+ * ✓ Reads raw HTTP text and creates HttpRequest objects
+ * ✓ Applies filters (pre/post processing)
+ * ✓ Delegates to RouteResolver for URL → controller matching
+ * ✓ Handles exceptions via GlobalExceptionHandler
+ * 
+ * ✗ Does NOT create beans or manage the IoC container
+ * ✗ Does NOT set up routes or register controllers
+ * ✗ Does NOT have a main() method
+ * ✗ Does NOT contain @SpringBootApplication
+ * 
+ * These things are done by HSpringApplication.run(), which creates this
+ * WebServer and gives it everything it needs (RouteResolver, FilterChain, etc.)
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * REQUEST LIFECYCLE (handled by this class)
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
+ * 1. Socket.accept()           → Accept TCP connection
+ * 2. Parse raw HTTP            → Create HttpRequest object
+ * 3. FilterChain.preHandle()   → Run pre-filters (logging, auth, etc.)
+ * 4. RouteResolver.resolve()   → Find and invoke controller method
+ * 5. FilterChain.postHandle()  → Run post-filters
+ * 6. Socket.close()            → Close connection
+ * 
+ * On error: GlobalExceptionHandler formats a proper error JSON response
  */
 public class WebServer {
 
     private static final Logger logger = LoggerFactory.getLogger(WebServer.class);
 
-    // Server configuration
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Dependencies — injected by HSpringApplication during startup
+    // These are NOT created here. This class receives them from outside,
+    // just like Tomcat receives the DispatcherServlet from Spring.
+    // ═══════════════════════════════════════════════════════════════════════════
+    private final RouteResolver routeResolver;
+    private final FilterChain filterChain;
+    private final GlobalExceptionHandler exceptionHandler;
     private final int port;
     private final int threadPoolSize;
-
-    // Core components (similar to Spring's internal components)
-    private ApplicationContext applicationContext;
-    private RouteResolver routeResolver;
-    private FilterChain filterChain;
-    private GlobalExceptionHandler exceptionHandler;
 
     // Server state
     private ExecutorService threadPool;
@@ -99,164 +112,50 @@ public class WebServer {
     private volatile boolean running = false;
 
     /**
-     * Creates a WebServer with default configuration.
-     */
-    public WebServer() {
-        this(8080, 10);
-    }
-
-    /**
-     * Creates a WebServer with custom configuration.
+     * Creates the embedded web server with all its dependencies.
      * 
-     * @param port           Port to listen on
-     * @param threadPoolSize Number of worker threads
+     * Notice: The server receives everything it needs from the OUTSIDE.
+     * It doesn't create its own RouteResolver or FilterChain.
+     * HSpringApplication.run() creates these and passes them in.
+     * 
+     * This is the same pattern as Tomcat — Spring creates Tomcat and
+     * gives it the DispatcherServlet (which knows about routes).
+     * 
+     * @param routeResolver     Resolves URLs to controller methods
+     * @param filterChain       Chain of request/response filters
+     * @param exceptionHandler  Handles exceptions centrally
+     * @param port              Port to listen on (from application.properties)
+     * @param threadPoolSize    Number of worker threads (from application.properties)
      */
-    public WebServer(int port, int threadPoolSize) {
+    public WebServer(RouteResolver routeResolver,
+                     FilterChain filterChain,
+                     GlobalExceptionHandler exceptionHandler,
+                     int port,
+                     int threadPoolSize) {
+        this.routeResolver = routeResolver;
+        this.filterChain = filterChain;
+        this.exceptionHandler = exceptionHandler;
         this.port = port;
         this.threadPoolSize = threadPoolSize;
     }
 
     /**
-     * Main entry point - starts the web server.
-     * Similar to SpringApplication.run()
-     */
-    public static void main(String[] args) {
-        WebServer server = new WebServer();
-        server.run("com.project.MultiThreadedWebServer");
-    }
-
-    /**
-     * Initializes and starts the web server.
-     * This is the main bootstrap method, similar to SpringApplication.run().
+     * Starts the embedded HTTP server.
      * 
-     * @param basePackage The base package to scan for components
+     * This is the equivalent of Tomcat.start() — it:
+     * 1. Creates the thread pool for concurrent request handling
+     * 2. Opens a ServerSocket on the configured port
+     * 3. Enters the accept loop (blocks waiting for connections)
+     * 4. Dispatches each connection to a worker thread
      */
-    public void run(String basePackage) {
-        long startTime = System.currentTimeMillis();
-        
-        printBanner();
-        
-        logger.info("Starting HSpring WebServer...");
-        
-        // Step 1: Initialize the IoC Container (ApplicationContext)
-        logger.info("═══════════════════════════════════════════════════════════════");
-        logger.info("STEP 1: Initializing IoC Container (ApplicationContext)");
-        logger.info("═══════════════════════════════════════════════════════════════");
-        applicationContext = new ApplicationContext(basePackage);
-        
-        // Fallback: If no controllers found (JAR mode), register manually
-        if (applicationContext.getControllers().isEmpty()) {
-            logger.info("No controllers found via scanning, registering manually...");
-            registerComponentsManually();
-        }
-
-        // Step 2: Initialize Route Resolver and register controllers
-        logger.info("═══════════════════════════════════════════════════════════════");
-        logger.info("STEP 2: Initializing Route Resolver");
-        logger.info("═══════════════════════════════════════════════════════════════");
-        routeResolver = new RouteResolver();
-        for (Object controller : applicationContext.getControllers()) {
-            routeResolver.registerController(controller);
-        }
-
-        // Step 3: Initialize Filter Chain
-        logger.info("═══════════════════════════════════════════════════════════════");
-        logger.info("STEP 3: Initializing Filter Chain");
-        logger.info("═══════════════════════════════════════════════════════════════");
-        filterChain = new FilterChain();
-        filterChain.addFilter(new LoggingFilter());
-        // Add more filters here: authFilter, rateLimitFilter, etc.
-
-        // Step 4: Initialize Exception Handler
-        logger.info("═══════════════════════════════════════════════════════════════");
-        logger.info("STEP 4: Initializing Exception Handler");
-        logger.info("═══════════════════════════════════════════════════════════════");
-        exceptionHandler = new GlobalExceptionHandler();
-
-        // Step 5: Create Thread Pool
-        logger.info("═══════════════════════════════════════════════════════════════");
-        logger.info("STEP 5: Creating Thread Pool (size: {})", threadPoolSize);
-        logger.info("═══════════════════════════════════════════════════════════════");
+    public void start() {
+        running = true;
         threadPool = Executors.newFixedThreadPool(threadPoolSize);
 
-        // Step 6: Start the server
-        long elapsed = System.currentTimeMillis() - startTime;
-        logger.info("═══════════════════════════════════════════════════════════════");
-        logger.info("HSpring WebServer started in {} ms on port {}", elapsed, port);
-        logger.info("═══════════════════════════════════════════════════════════════");
-        
-        startServer();
-    }
-
-    /**
-     * Prints a fancy startup banner.
-     */
-    private void printBanner() {
-        String banner = """
-                
-                ╔═══════════════════════════════════════════════════════════╗
-                ║                                                           ║
-                ║   ██╗  ██╗███████╗██████╗ ██████╗ ██╗███╗   ██╗ ██████╗   ║
-                ║   ██║  ██║██╔════╝██╔══██╗██╔══██╗██║████╗  ██║██╔════╝   ║
-                ║   ███████║███████╗██████╔╝██████╔╝██║██╔██╗ ██║██║  ███╗  ║
-                ║   ██╔══██║╚════██║██╔═══╝ ██╔══██╗██║██║╚██╗██║██║   ██║  ║
-                ║   ██║  ██║███████║██║     ██║  ██║██║██║ ╚████║╚██████╔╝  ║
-                ║   ╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝   ║
-                ║                                                           ║
-                ║   HSpring Framework - by Harendra                         ║
-                ║   Learn Spring Boot Internals                             ║
-                ║   Version: 1.0.0                                          ║
-                ║                                                           ║
-                ╚═══════════════════════════════════════════════════════════╝
-                """;
-        System.out.println(banner);
-    }
-
-    /**
-     * Manually registers components when classpath scanning fails (e.g., in JAR mode).
-     * 
-     * This is a fallback for when the application runs from a JAR file,
-     * where file-based scanning doesn't work because classes are inside the archive.
-     */
-    private void registerComponentsManually() {
-        logger.info("Registering components manually for JAR deployment...");
-        
-        // Register services first (they have no dependencies)
-        UserService userService = new UserService();
-        applicationContext.registerBean(UserService.class, userService);
-        logger.info("  ✓ Registered @Service: UserService");
-        
-        // Register controllers (may depend on services)
-        HomeController homeController = new HomeController();
-        applicationContext.registerBean(HomeController.class, homeController);
-        logger.info("  ✓ Registered @RestController: HomeController");
-        
-        UserController userController = new UserController();
-        // Manually inject UserService into UserController
-        try {
-            java.lang.reflect.Field userServiceField = UserController.class.getDeclaredField("userService");
-            userServiceField.setAccessible(true);
-            userServiceField.set(userController, userService);
-            logger.info("  → Injected UserService into UserController.userService");
-        } catch (Exception e) {
-            logger.error("Failed to inject UserService into UserController", e);
-        }
-        applicationContext.registerBean(UserController.class, userController);
-        logger.info("  ✓ Registered @RestController: UserController");
-    }
-
-    /**
-     * Starts the server socket and accepts connections.
-     */
-    private void startServer() {
-        running = true;
-        
         try {
             serverSocket = new ServerSocket(port);
-            serverSocket.setSoTimeout(0); // No timeout for accept()
-            
-            logger.info("Server listening on http://localhost:{}", port);
-            
+            logger.info("Embedded server listening on http://localhost:{}", port);
+
             while (running) {
                 try {
                     Socket clientSocket = serverSocket.accept();
@@ -268,15 +167,29 @@ public class WebServer {
                 }
             }
         } catch (IOException e) {
-            logger.error("Failed to start server on port {}", port, e);
+            logger.error("Failed to start embedded server on port {}", port, e);
         }
     }
 
     /**
-     * Handles a single HTTP request.
-     * This method demonstrates the complete request lifecycle.
+     * Handles a single HTTP request — the complete request lifecycle.
      * 
-     * @param clientSocket The client socket connection
+     * ═══════════════════════════════════════════════════════════════════════════
+     * REQUEST LIFECYCLE (matches real Spring Boot's DispatcherServlet flow)
+     * ═══════════════════════════════════════════════════════════════════════════
+     * 
+     * ┌──────────────── Client sends HTTP request ────────────────────┐
+     * │                                                                │
+     * │  1. Parse raw HTTP text → HttpRequest object                  │
+     * │  2. Pre-filters: logging, auth, CORS, etc.                    │
+     * │  3. Route to controller method (RouteResolver)                │
+     * │     → Controller returns ResponseEntity                       │
+     * │     → Framework auto-serializes body to JSON                  │
+     * │  4. Post-filters                                              │
+     * │  5. Send HTTP response back to client                         │
+     * │                                                                │
+     * │  On error → GlobalExceptionHandler formats error JSON         │
+     * └──────────────── Connection closed ────────────────────────────┘
      */
     private void handleRequest(Socket clientSocket) {
         HttpRequest request = null;
@@ -286,49 +199,44 @@ public class WebServer {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
              PrintWriter writer = new PrintWriter(clientSocket.getOutputStream(), true)) {
 
-            // Parse the request line
+            // Parse raw HTTP text into structured HttpRequest
             String requestLine = reader.readLine();
             if (requestLine == null || requestLine.isEmpty()) {
                 return;
             }
 
-            // Create HttpRequest object (parses headers and body)
             request = new HttpRequest(requestLine, reader);
             response = new HttpResponse(writer);
 
-            // Apply pre-handle filters
+            // Pre-filters (logging, auth, etc.)
             if (!filterChain.applyPreHandle(request, response)) {
-                // Filter short-circuited the request
                 return;
             }
 
-            // Route the request to the appropriate controller
+            // Route to controller method
             boolean routeFound = routeResolver.resolve(request, response);
 
             if (!routeFound) {
                 response.status(HttpResponse.NOT_FOUND)
-                        .json("{\"error\": \"Not Found\", \"message\": \"No handler found for " + 
+                        .json("{\"error\": \"Not Found\", \"message\": \"No handler found for " +
                               request.getMethod() + " " + request.getPath() + "\", \"status\": 404}");
             }
 
-            // Apply post-handle filters
+            // Post-filters
             filterChain.applyPostHandle(request, response);
 
         } catch (Exception e) {
             occuredException = e;
             logger.error("Error handling request", e);
-            
-            // Use exception handler if response not yet sent
+
             if (response != null && !response.isHeadersSent()) {
                 exceptionHandler.handleException(request, response, e);
             }
         } finally {
-            // Apply after-completion filters (cleanup)
             if (request != null && response != null) {
                 filterChain.applyAfterCompletion(request, response, occuredException);
             }
-            
-            // Close the socket
+
             try {
                 clientSocket.close();
             } catch (IOException e) {
@@ -339,21 +247,18 @@ public class WebServer {
 
     /**
      * Adds a custom filter to the filter chain.
-     * 
-     * @param filter The filter to add
      */
     public void addFilter(Filter filter) {
-        if (filterChain != null) {
-            filterChain.addFilter(filter);
-        }
+        filterChain.addFilter(filter);
     }
 
     /**
-     * Stops the server gracefully.
+     * Stops the embedded server gracefully.
+     * Called by the JVM shutdown hook (set up in HSpringApplication).
      */
     public void stop() {
         running = false;
-        
+
         if (serverSocket != null && !serverSocket.isClosed()) {
             try {
                 serverSocket.close();
@@ -361,22 +266,11 @@ public class WebServer {
                 logger.error("Error closing server socket", e);
             }
         }
-        
+
         if (threadPool != null) {
             threadPool.shutdown();
         }
-        
-        if (applicationContext != null) {
-            applicationContext.close();
-        }
-        
-        logger.info("Server stopped");
-    }
 
-    /**
-     * Gets the ApplicationContext (IoC Container).
-     */
-    public ApplicationContext getApplicationContext() {
-        return applicationContext;
+        logger.info("Embedded server stopped");
     }
 }
