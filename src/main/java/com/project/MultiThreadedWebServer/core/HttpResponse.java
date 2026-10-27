@@ -1,7 +1,10 @@
 package com.project.MultiThreadedWebServer.core;
 
-import java.io.PrintWriter;
-import java.util.HashMap;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -106,8 +109,14 @@ import java.util.Map;
  */
 public class HttpResponse {
 
-    /** The writer connected to the client socket */
-    private final PrintWriter writer;
+    /**
+     * The raw byte stream connected to the client socket.
+     *
+     * We write BYTES (not characters) so that Content-Length - which counts
+     * bytes - always matches what we actually send, for any text, in any
+     * language, regardless of the platform's default charset.
+     */
+    private final OutputStream out;
     
     /** HTTP status code (200, 404, 500, etc.) */
     private int statusCode = 200;
@@ -118,8 +127,8 @@ public class HttpResponse {
     /** Content-Type header value */
     private String contentType = "application/json";
     
-    /** Additional headers to include in response */
-    private final Map<String, String> headers = new HashMap<>();
+    /** Additional headers to include in response (insertion order preserved) */
+    private final Map<String, String> headers = new LinkedHashMap<>();
     
     /** Flag to prevent sending headers twice */
     private boolean headersSent = false;
@@ -156,16 +165,16 @@ public class HttpResponse {
     public static final int INTERNAL_SERVER_ERROR = 500;
 
     /**
-     * Creates an HttpResponse wrapper for the given writer.
-     * 
-     * @param writer PrintWriter connected to the client socket's output stream
+     * Creates an HttpResponse wrapper for the given output stream.
+     *
+     * @param out Output stream connected to the client socket
      */
-    public HttpResponse(PrintWriter writer) {
-        this.writer = writer;
-        
+    public HttpResponse(OutputStream out) {
+        this.out = out;
+
         // Set default headers
         headers.put("Connection", "close");       // Close connection after response
-        headers.put("Server", "HSpring/1.0");  // Identify our server
+        headers.put("Server", "HSpring/1.1");  // Identify our server
     }
 
     /**
@@ -253,6 +262,9 @@ public class HttpResponse {
      * 
      * Note: \r\n is CRLF (Carriage Return + Line Feed), required by HTTP spec.
      * 
+     * Body and headers are encoded as UTF-8, and Content-Length is the
+     * length of the encoded BYTES - not body.length(), which counts chars.
+     *
      * @param body The response body as a string
      */
     public void send(String body) {
@@ -262,34 +274,44 @@ public class HttpResponse {
         }
         headersSent = true;
 
+        byte[] bodyBytes = (body == null ? "" : body).getBytes(StandardCharsets.UTF_8);
+        StringBuilder head = new StringBuilder();
+
         // ─────────────────────────────────────────────────────────────────────────
         // Write STATUS LINE: HTTP/1.1 200 OK
         // ─────────────────────────────────────────────────────────────────────────
-        writer.printf("HTTP/1.1 %d %s\r\n", statusCode, statusMessage);
+        head.append("HTTP/1.1 ").append(statusCode).append(' ').append(statusMessage).append("\r\n");
 
         // ─────────────────────────────────────────────────────────────────────────
         // Write HEADERS
         // ─────────────────────────────────────────────────────────────────────────
-        writer.printf("Content-Type: %s\r\n", contentType);
-        writer.printf("Content-Length: %d\r\n", body.getBytes().length);
-        
+        head.append("Content-Type: ").append(contentType).append("\r\n");
+        head.append("Content-Length: ").append(bodyBytes.length).append("\r\n");
+
         // Write custom headers
         for (Map.Entry<String, String> entry : headers.entrySet()) {
-            writer.printf("%s: %s\r\n", entry.getKey(), entry.getValue());
+            head.append(entry.getKey()).append(": ").append(entry.getValue()).append("\r\n");
         }
 
         // ─────────────────────────────────────────────────────────────────────────
         // Write EMPTY LINE (signals end of headers)
         // ─────────────────────────────────────────────────────────────────────────
-        writer.print("\r\n");
+        head.append("\r\n");
 
-        // ─────────────────────────────────────────────────────────────────────────
-        // Write BODY
-        // ─────────────────────────────────────────────────────────────────────────
-        writer.print(body);
-        
-        // Ensure everything is written to the socket
-        writer.flush();
+        try {
+            out.write(head.toString().getBytes(StandardCharsets.UTF_8));
+
+            // ─────────────────────────────────────────────────────────────────────
+            // Write BODY
+            // ─────────────────────────────────────────────────────────────────────
+            out.write(bodyBytes);
+
+            // Ensure everything is written to the socket
+            out.flush();
+        } catch (IOException e) {
+            // e.g. the client disconnected before we could answer
+            throw new UncheckedIOException("Failed to write response", e);
+        }
     }
 
     /**
@@ -358,7 +380,9 @@ public class HttpResponse {
         // Choose body format based on content type
         String body;
         if (contentType.contains("json")) {
-            body = String.format("{\"error\": \"%s\", \"status\": %d}", errorMessage, statusCode);
+            // Escape the message: a quote inside it would otherwise produce invalid JSON
+            body = String.format("{\"error\": \"%s\", \"message\": \"%s\", \"status\": %d}",
+                    escapeJson(statusMessage), escapeJson(errorMessage), statusCode);
         } else if (contentType.contains("html")) {
             body = String.format(
                     "<html><head><title>%s</title></head>" +
@@ -412,6 +436,7 @@ public class HttpResponse {
             case 403 -> "Forbidden";
             case 404 -> "Not Found";
             case 405 -> "Method Not Allowed";
+            case 413 -> "Payload Too Large";
             case 415 -> "Unsupported Media Type";
             case 500 -> "Internal Server Error";
             case 502 -> "Bad Gateway";
@@ -428,5 +453,38 @@ public class HttpResponse {
     /** Returns whether headers have already been sent. */
     public boolean isHeadersSent() {
         return headersSent;
+    }
+
+    /** Returns a response header that has been set (null if absent). */
+    public String getHeader(String name) {
+        return headers.get(name);
+    }
+
+    /**
+     * Escapes a value for safe embedding inside a JSON string literal.
+     *
+     * Without escaping, a message like:  Name "Bob" is invalid
+     * would produce broken JSON:         {"message": "Name "Bob" is invalid"}
+     */
+    public static String escapeJson(String value) {
+        if (value == null) return "";
+        StringBuilder sb = new StringBuilder(value.length());
+        for (char c : value.toCharArray()) {
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+        }
+        return sb.toString();
     }
 }

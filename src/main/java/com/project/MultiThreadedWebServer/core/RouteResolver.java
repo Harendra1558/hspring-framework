@@ -3,11 +3,12 @@ package com.project.MultiThreadedWebServer.core;
 import com.project.MultiThreadedWebServer.annotations.DeleteMapping;
 import com.project.MultiThreadedWebServer.annotations.PutMapping;
 import com.project.MultiThreadedWebServer.annotations.RestController;
-import com.project.MultiThreadedWebServer.GetMapping;
-import com.project.MultiThreadedWebServer.PostMapping;
+import com.project.MultiThreadedWebServer.annotations.GetMapping;
+import com.project.MultiThreadedWebServer.annotations.PostMapping;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -133,7 +134,9 @@ public class RouteResolver {
      *   "PUT"    → [RouteInfo5, ...]
      *   "DELETE" → [RouteInfo6, ...]
      * 
-     * Using ConcurrentHashMap for thread-safety.
+     * Routes are only registered at startup (single thread) and only read
+     * afterwards by worker threads, so plain lists are safe here.
+     * ConcurrentHashMap still guards the outer map.
      */
     private final Map<String, List<RouteInfo>> routes = new ConcurrentHashMap<>();
 
@@ -258,6 +261,16 @@ public class RouteResolver {
      */
     private void registerRoute(String httpMethod, String pattern, Object controller, Method method) {
         // ─────────────────────────────────────────────────────────────────────────
+        // FAIL FAST: reject unsupported handler signatures at startup,
+        // not with a confusing error on the first request (Spring does the same)
+        // ─────────────────────────────────────────────────────────────────────────
+        if (!isSupportedSignature(method)) {
+            throw new IllegalStateException("Unsupported handler signature: " + method
+                    + " - use (HttpRequest, HttpResponse), (HttpResponse) or ()");
+        }
+        method.setAccessible(true);
+
+        // ─────────────────────────────────────────────────────────────────────────
         // Extract path variable names and build regex pattern
         // ─────────────────────────────────────────────────────────────────────────
         List<String> paramNames = new ArrayList<>();
@@ -297,8 +310,19 @@ public class RouteResolver {
         
         // Create RouteInfo and add to routes
         RouteInfo routeInfo = new RouteInfo(pattern, regex, paramNames, controller, method);
-        routes.get(httpMethod).add(routeInfo);
-        
+        List<RouteInfo> methodRoutes = routes.get(httpMethod);
+        methodRoutes.add(routeInfo);
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // MOST SPECIFIC ROUTE WINS
+        // With both /users/me and /users/{id}, a request for /users/me must hit
+        // the literal route. Sorting routes with fewer variables first guarantees
+        // that, regardless of the (unspecified) order of getDeclaredMethods().
+        // ─────────────────────────────────────────────────────────────────────────
+        methodRoutes.sort(Comparator
+                .comparingInt((RouteInfo r) -> r.paramNames().size())
+                .thenComparing(Comparator.comparingInt((RouteInfo r) -> r.pattern().length()).reversed()));
+
         // Log the registered route
         logger.info("  {} {} → {}.{}()", 
                 httpMethod, 
@@ -354,7 +378,8 @@ public class RouteResolver {
                 for (int i = 0; i < routeInfo.paramNames().size(); i++) {
                     String paramName = routeInfo.paramNames().get(i);
                     String paramValue = matcher.group(i + 1);  // +1 because group 0 is full match
-                    request.setPathVariable(paramName, paramValue);
+                    // Decode "%20" etc. - /users/John%20Doe → name = "John Doe"
+                    request.setPathVariable(paramName, HttpRequest.decodeUrl(paramValue));
                 }
 
                 // Invoke the handler method
@@ -417,19 +442,62 @@ public class RouteResolver {
                     response.json((String) result);
                 }
             } else {
-                logger.warn("Unsupported method signature for: {}.{}", 
-                        controller.getClass().getSimpleName(), 
-                        method.getName());
-                return false;
+                // Unreachable: signatures are validated in registerRoute() at startup
+                throw new IllegalStateException("Unsupported handler signature: " + method);
             }
-            
+
             return true;
             
-        } catch (Exception e) {
-            logger.error("Error invoking handler method", e);
-            // Re-throw so GlobalExceptionHandler can catch it
-            throw new RuntimeException("Handler invocation failed", e);
+        } catch (InvocationTargetException e) {
+            // ─────────────────────────────────────────────────────────────────────
+            // UNWRAP THE REAL EXCEPTION
+            // Method.invoke() wraps whatever the controller threw in an
+            // InvocationTargetException. If we re-threw the wrapper, the
+            // GlobalExceptionHandler would only ever see a generic exception
+            // and EVERY error would become a 500 - a NotFoundException would
+            // never turn into a 404. Spring unwraps it the same way.
+            // ─────────────────────────────────────────────────────────────────────
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException("Handler threw a checked exception", cause);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException("Cannot access handler method " + routeInfo.method(), e);
         }
+    }
+
+    /**
+     * Returns the HTTP methods that have a route matching this path.
+     *
+     * Used to tell apart:
+     *   404 Not Found          → no route matches the path at all
+     *   405 Method Not Allowed → the path exists, but not for this method
+     *                            (e.g. DELETE /api/users when only GET/POST exist)
+     */
+    public Set<String> getAllowedMethods(String path) {
+        Set<String> allowed = new TreeSet<>();
+        for (Map.Entry<String, List<RouteInfo>> entry : routes.entrySet()) {
+            for (RouteInfo info : entry.getValue()) {
+                if (info.regex().matcher(path).matches()) {
+                    allowed.add(entry.getKey());
+                    break;
+                }
+            }
+        }
+        return allowed;
+    }
+
+    /** Handler methods may take (HttpRequest, HttpResponse), (HttpResponse) or nothing. */
+    private static boolean isSupportedSignature(Method method) {
+        Class<?>[] paramTypes = method.getParameterTypes();
+        return paramTypes.length == 0
+                || (paramTypes.length == 1 && paramTypes[0] == HttpResponse.class)
+                || (paramTypes.length == 2 && paramTypes[0] == HttpRequest.class
+                        && paramTypes[1] == HttpResponse.class);
     }
 
     /**

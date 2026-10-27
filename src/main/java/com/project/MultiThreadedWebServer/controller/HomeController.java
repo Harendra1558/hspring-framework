@@ -1,7 +1,7 @@
 package com.project.MultiThreadedWebServer.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.project.MultiThreadedWebServer.GetMapping;
+import com.project.MultiThreadedWebServer.annotations.GetMapping;
 import com.project.MultiThreadedWebServer.annotations.RestController;
 import com.project.MultiThreadedWebServer.core.HttpRequest;
 import com.project.MultiThreadedWebServer.core.HttpResponse;
@@ -178,7 +178,7 @@ public class HomeController {
             Map<String, Object> health = new HashMap<>();
             health.put("status", "UP");
             health.put("timestamp", System.currentTimeMillis());
-            health.put("version", "1.0.0");
+            health.put("version", "1.1.0");
             
             Map<String, Object> system = new HashMap<>();
             system.put("javaVersion", System.getProperty("java.version"));

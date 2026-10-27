@@ -5,9 +5,9 @@ import com.project.MultiThreadedWebServer.core.HttpResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * FilterChain manages the execution of multiple filters in order.
@@ -26,14 +26,20 @@ public class FilterChain {
 
     private static final Logger logger = LoggerFactory.getLogger(FilterChain.class);
 
-    private final List<Filter> filters = new ArrayList<>();
+    /**
+     * CopyOnWriteArrayList: worker threads iterate over the filters on every
+     * request, while addFilter() may be called at any time. Writes copy the
+     * array (rare), reads never lock (frequent) - and iteration can never
+     * throw ConcurrentModificationException.
+     */
+    private final List<Filter> filters = new CopyOnWriteArrayList<>();
 
     /**
      * Adds a filter to the chain.
-     * 
+     *
      * @param filter The filter to add
      */
-    public void addFilter(Filter filter) {
+    public synchronized void addFilter(Filter filter) {
         filters.add(filter);
         // Keep filters sorted by order
         filters.sort(Comparator.comparingInt(Filter::getOrder));
@@ -42,20 +48,19 @@ public class FilterChain {
 
     /**
      * Executes all filter preHandle methods.
-     * 
+     *
+     * Exceptions are NOT swallowed here: they propagate to the
+     * GlobalExceptionHandler, so an auth filter can simply
+     * throw new UnauthorizedException(...) and the client gets a 401.
+     *
      * @param request  The HTTP request
      * @param response The HTTP response
      * @return true if all filters passed, false if any filter short-circuited
      */
     public boolean applyPreHandle(HttpRequest request, HttpResponse response) {
         for (Filter filter : filters) {
-            try {
-                if (!filter.preHandle(request, response)) {
-                    logger.debug("Request short-circuited by filter: {}", filter.getClass().getSimpleName());
-                    return false;
-                }
-            } catch (Exception e) {
-                logger.error("Error in filter preHandle: {}", filter.getClass().getSimpleName(), e);
+            if (!filter.preHandle(request, response)) {
+                logger.debug("Request short-circuited by filter: {}", filter.getClass().getSimpleName());
                 return false;
             }
         }

@@ -4,6 +4,10 @@ A **lightweight implementation of Spring Boot internals** built from scratch in 
 
 > **📚 Educational Purpose:** This project is designed for developers who want to understand what happens "behind the scenes" when you use Spring Boot. Every class is heavily documented with explanations of the concepts.
 
+> 📖 **Full documentation:** see the [`docs/`](docs/README.md) folder: architecture, IoC internals,
+> HTTP & threading, routing/filters/errors, API reference, bugs & lessons learned, and an
+> [interview guide](docs/08-interview-guide.md) with 60+ questions and answers.
+
 ## 📋 Table of Contents
 
 - [Overview](#-overview)
@@ -65,12 +69,16 @@ This project answers all these questions by implementing them from scratch!
 | `@Component` | Marks a class as a managed bean | `@Component` |
 | `@Service` | Marks a service layer class | `@Service` |
 | `@RestController` | Marks a REST API controller | `@RestController` |
-| `@Autowired` | Injects dependencies automatically | `@Autowired` |
+| `@Autowired` | Field injection + constructor injection (single constructor needs no annotation) | `@Autowired` |
+| `@PostConstruct` / `@PreDestroy` | Lifecycle callbacks after injection / on shutdown | `jakarta.annotation.*` |
+| Circular dependency detection | Fails fast with the cycle path `A → B → A` | `BeanCurrentlyInCreationException` |
+| JAR-aware component scanning | Finds components in `target/classes` *and* inside the packaged JAR | `ClassPathBeanDefinitionScanner` |
 | `@GetMapping` | Maps HTTP GET requests | `@GetMapping` |
 | `@PostMapping` | Maps HTTP POST requests | `@PostMapping` |
 | `@PutMapping` | Maps HTTP PUT requests | `@PutMapping` |
 | `@DeleteMapping` | Maps HTTP DELETE requests | `@DeleteMapping` |
-| Path Variables | `/users/{id}` pattern matching | `@PathVariable` |
+| Path Variables | `/users/{id}` pattern matching, most specific route wins | `@PathVariable` |
+| 404 vs 405 | Unknown path → 404; wrong method → 405 + `Allow` header | `HttpRequestMethodNotSupportedException` |
 | Query Parameters | `?key=value` parsing | `@RequestParam` |
 | `Filter` | Request/Response interceptors | `Filter` / `HandlerInterceptor` |
 | `GlobalExceptionHandler` | Centralized exception handling | `@ControllerAdvice` |
@@ -83,51 +91,54 @@ This project answers all these questions by implementing them from scratch!
 src/main/java/com/project/MultiThreadedWebServer/
 │
 ├── WebServer.java              # 🚀 MAIN ENTRY POINT
-│                               # Like SpringApplication.run()
-│                               # Bootstraps the entire framework
+│                               # Like SpringApplication.run() + embedded Tomcat
+│                               # Bootstraps the framework, owns the thread pool
 │
-├── Client.java                 # 🧪 Test client for API testing
+├── Client.java                 # 🧪 Raw-socket demo client for every endpoint
 │
-├── annotations/                # 📝 CUSTOM ANNOTATIONS
-│   │                           # These are markers that the framework reads
+├── annotations/                # 📝 CUSTOM ANNOTATIONS (read via reflection)
 │   ├── Component.java          # Marks any managed bean
 │   ├── Service.java            # Marks service layer (business logic)
-│   ├── RestController.java     # Marks REST controllers
-│   ├── Autowired.java          # Marks fields for dependency injection
+│   ├── RestController.java     # Marks REST controllers (+ optional base path)
+│   ├── Autowired.java          # Field or constructor injection
+│   ├── PostConstruct.java      # Init callback after injection
+│   ├── PreDestroy.java         # Destroy callback on shutdown
+│   ├── GetMapping.java         # Maps GET requests
+│   ├── PostMapping.java        # Maps POST requests
 │   ├── PutMapping.java         # Maps PUT requests
 │   └── DeleteMapping.java      # Maps DELETE requests
 │
 ├── core/                       # 🔧 FRAMEWORK CORE
-│   │                           # The "engine" that makes everything work
-│   ├── ApplicationContext.java # IoC Container - creates & manages beans
+│   ├── ApplicationContext.java # IoC Container - scan, create, inject, lifecycle
+│   ├── BeanCreationException.java  # Fail-fast wiring errors
 │   ├── RouteResolver.java      # Maps URLs to controller methods
-│   ├── HttpRequest.java        # Wraps incoming HTTP request data
-│   └── HttpResponse.java       # Wraps outgoing HTTP response
-│
-├── controller/                 # 🎮 REST CONTROLLERS
-│   │                           # Handle incoming HTTP requests
-│   ├── HomeController.java     # Home page & health check
-│   └── UserController.java     # User CRUD operations
-│
-├── service/                    # 💼 SERVICE LAYER
-│   │                           # Business logic lives here
-│   └── UserService.java        # User-related operations
+│   ├── HttpRequest.java        # Parses raw request bytes (UTF-8)
+│   └── HttpResponse.java       # Writes the HTTP response bytes
 │
 ├── filter/                     # 🔍 REQUEST FILTERS
-│   │                           # Intercept requests before/after controller
-│   ├── Filter.java             # Interface defining filter contract
-│   ├── FilterChain.java        # Manages multiple filters
+│   ├── Filter.java             # preHandle / postHandle / afterCompletion
+│   ├── FilterChain.java        # Runs filters in order
 │   └── LoggingFilter.java      # Logs request/response details
 │
 ├── exception/                  # ⚠️ EXCEPTION HANDLING
-│   │                           # Centralized error handling
-│   ├── GlobalExceptionHandler.java  # Catches all exceptions
-│   ├── NotFoundException.java       # 404 errors
-│   ├── ValidationException.java     # Validation errors
-│   └── UnauthorizedException.java   # 401 errors
+│   ├── GlobalExceptionHandler.java   # Exception type → HTTP status + JSON
+│   ├── NotFoundException.java        # 404
+│   ├── MethodNotAllowedException.java# 405
+│   ├── ValidationException.java      # 400 (+ field)
+│   └── UnauthorizedException.java    # 401
 │
-├── GetMapping.java             # @GetMapping annotation
-└── PostMapping.java            # @PostMapping annotation
+├── controller/                 # 🎮 DEMO APP: REST controllers
+│   ├── HomeController.java     # Home page & health check
+│   └── UserController.java     # User CRUD (field injection)
+├── service/
+│   └── UserService.java        # Business logic (constructor injection, @PostConstruct)
+├── repository/
+│   └── UserRepository.java     # Thread-safe in-memory storage
+└── model/
+    └── User.java               # Immutable record
+
+src/test/java/                  # 🧪 48 JUnit 5 tests (unit + real-server integration)
+docs/                           # 📖 Learning & interview documentation
 ```
 
 ## 🧠 Core Concepts Explained
@@ -344,7 +355,7 @@ Request → Filter1.pre → Filter2.pre → Controller → Filter2.post → Filt
 
 ### Prerequisites
 
-- **Java 17** or higher
+- **Java 17** or higher (Maven uses `JAVA_HOME`, so point it at a JDK 17+)
 - **Maven 3.6+**
 
 ### Build & Run
@@ -354,15 +365,28 @@ Request → Filter1.pre → Filter2.pre → Controller → Filter2.post → Filt
 git clone https://github.com/Harendra1558/hspring-framework.git
 cd hspring-framework
 
-# Build the project
-mvn clean compile
+# Build the project and run all tests
+mvn clean package
 
-# Run the server
-mvn exec:java -Dexec.mainClass="com.project.MultiThreadedWebServer.WebServer"
+# Run the server (default port 8080)
+java -jar target/hspring-framework-1.1.0.jar
 
-# In another terminal, run the test client
+# Custom port / thread count
+java -jar target/hspring-framework-1.1.0.jar 9090
+java -Dserver.port=9090 -Dserver.threads=20 -jar target/hspring-framework-1.1.0.jar
+PORT=9090 java -jar target/hspring-framework-1.1.0.jar
+
+# In another terminal, run the demo client
 mvn exec:java -Dexec.mainClass="com.project.MultiThreadedWebServer.Client"
 ```
+
+### Run the tests
+
+```bash
+mvn test
+```
+
+See [docs/06-running-testing-extending.md](docs/06-running-testing-extending.md) for what each test covers.
 
 ### Or Run from IDE
 1. Open the project in IntelliJ IDEA / Eclipse / VS Code
@@ -385,6 +409,9 @@ You should see a beautiful documentation page!
 | POST | `/api/users` | Create new user | See below |
 | PUT | `/api/users/{id}` | Update user | See below |
 | DELETE | `/api/users/{id}` | Delete user | `curl -X DELETE http://localhost:8080/api/users/1` |
+
+Errors use one JSON shape: `{"error", "message", "status", "path"}` (+ `"field"` for validation errors).
+Full details: [docs/05-api-reference.md](docs/05-api-reference.md).
 
 ### Example Requests
 
@@ -427,13 +454,18 @@ If you're new to this project, read the source files in this order:
 9. `WebServer.java` - How everything is bootstrapped and connected
 
 ### Step 5: See It In Action
-10. `controller/UserController.java` - Real controller using all features
-11. `service/UserService.java` - Business logic layer
+10. `controller/UserController.java` - Real controller using all features (field injection)
+11. `service/UserService.java` - Business logic layer (constructor injection, `@PostConstruct`)
+12. `repository/UserRepository.java` - Thread-safe storage with atomic operations
 
 ### Step 6: Understand Cross-cutting Concerns
-12. `filter/Filter.java` - Filter interface
-13. `filter/FilterChain.java` - How filters are orchestrated
-14. `exception/GlobalExceptionHandler.java` - Centralized error handling
+13. `filter/Filter.java` - Filter interface
+14. `filter/FilterChain.java` - How filters are orchestrated
+15. `exception/GlobalExceptionHandler.java` - Centralized error handling
+
+### Step 7: Prepare for Interviews
+16. [`docs/07-bugs-and-lessons.md`](docs/07-bugs-and-lessons.md) - Real bugs found in this codebase and how they were fixed
+17. [`docs/08-interview-guide.md`](docs/08-interview-guide.md) - How to pitch the project + Q&A
 
 ## 🛠️ Tech Stack
 
@@ -441,10 +473,11 @@ If you're new to this project, read the source files in this order:
 |------------|---------|---------|
 | Java | Programming language | 17 |
 | Maven | Build & dependency management | 3.6+ |
-| Jackson | JSON serialization/deserialization | 2.13.4 |
+| Jackson | JSON serialization/deserialization | 2.17.2 |
 | SLF4J + Logback | Logging | 2.0.16 / 1.5.15 |
 | Java Reflection API | Annotation processing & DI | Built-in |
-| Java NIO | Network I/O | Built-in |
+| `java.net` sockets | Blocking network I/O (`ServerSocket`) | Built-in |
+| JUnit 5 | Unit & integration tests | 5.10.5 |
 
 ## 🤝 Contributing
 
@@ -481,7 +514,7 @@ Want to share a live demo? Here are FREE hosting options:
 2. New Web Service → Select your repo
 3. Settings:
    - **Build Command:** `mvn clean package -DskipTests`
-   - **Start Command:** `java -jar target/hspring-framework-1.0.0.jar`
+   - **Start Command:** `java -jar target/hspring-framework-1.1.0.jar`
 
 ### Option 3: Build Executable JAR
 ```bash
@@ -489,7 +522,7 @@ Want to share a live demo? Here are FREE hosting options:
 mvn clean package -DskipTests
 
 # Run it anywhere Java 17+ is installed
-java -jar target/hspring-framework-1.0.0.jar
+java -jar target/hspring-framework-1.1.0.jar
 ```
 
 ---

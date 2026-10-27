@@ -1,10 +1,14 @@
 package com.project.MultiThreadedWebServer.core;
 
-import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -97,8 +101,14 @@ public class HttpRequest {
     /** Query string part: limit=5&sort=name (after the ?) */
     private final String queryString;
     
-    /** HTTP headers: Host, Content-Type, Authorization, etc. */
-    private final Map<String, String> headers;
+    /**
+     * HTTP headers: Host, Content-Type, Authorization, etc.
+     * 
+     * Header names are CASE-INSENSITIVE per the HTTP spec (RFC 9110):
+     * "Content-Length", "content-length" and "CONTENT-LENGTH" are the same header.
+     * A TreeMap with CASE_INSENSITIVE_ORDER gives us that behavior for free.
+     */
+    private final Map<String, String> headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
     
     /** Query parameters parsed from query string */
     private final Map<String, String> queryParams;
@@ -111,55 +121,97 @@ public class HttpRequest {
     private final Map<String, String> pathVariables;
     
     /** Request body (for POST, PUT, PATCH requests) */
-    private String body;
+    private final String body;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SAFETY LIMITS (real servers like Tomcat have the same kind of limits)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Max length of the request line or a single header line (Tomcat default: 8 KB) */
+    static final int MAX_LINE_BYTES = 8 * 1024;
+
+    /** Max number of headers - protects against header-flooding attacks */
+    static final int MAX_HEADERS = 100;
+
+    /** Max request body size: 1 MB */
+    static final int MAX_BODY_BYTES = 1024 * 1024;
+
+    /**
+     * Parses an HTTP request directly from the socket's raw byte stream.
+     *
+     * ═══════════════════════════════════════════════════════════════════════════
+     * WHY READ BYTES INSTEAD OF USING A BufferedReader?
+     * ═══════════════════════════════════════════════════════════════════════════
+     *
+     * The Content-Length header counts BYTES, not characters.
+     * In UTF-8, "é" is 2 bytes and "日" is 3 bytes. If we read the body with
+     * a Reader (which counts CHARACTERS), a body like {"name":"日本"} would
+     * make us wait for more characters than the client will ever send - the
+     * request hangs. So we read exact bytes, then decode them as UTF-8.
+     *
+     * @param in The socket input stream
+     * @return the parsed request, or null if the client sent nothing (closed the connection)
+     * @throws IOException              if reading from the socket fails
+     * @throws IllegalArgumentException if the request is malformed (→ 400 Bad Request)
+     */
+    public static HttpRequest parse(InputStream in) throws IOException {
+        String requestLine = readLine(in);
+        if (requestLine == null || requestLine.isEmpty()) {
+            return null;
+        }
+        return new HttpRequest(requestLine, in);
+    }
 
     /**
      * Constructs an HttpRequest by parsing the raw HTTP request.
-     * 
+     *
      * ═══════════════════════════════════════════════════════════════════════════
      * PARSING STEPS
      * ═══════════════════════════════════════════════════════════════════════════
-     * 
+     *
      * Step 1: Parse Request Line
      *   "GET /api/users?limit=5 HTTP/1.1"
      *           ↓
      *   method = "GET"
      *   uri = "/api/users?limit=5"
-     * 
+     *
      * Step 2: Separate Path from Query String
      *   uri = "/api/users?limit=5"
      *           ↓
      *   path = "/api/users"
      *   queryString = "limit=5"
-     * 
+     *
      * Step 3: Parse Query Parameters
      *   "limit=5&sort=name"
      *           ↓
      *   queryParams = {"limit": "5", "sort": "name"}
-     * 
+     *
      * Step 4: Parse Headers
      *   Read line by line until empty line
      *           ↓
      *   headers = {"Host": "localhost", "Content-Type": "application/json", ...}
-     * 
+     *
      * Step 5: Read Body (if POST/PUT/PATCH)
      *   Use Content-Length header to read exact number of bytes
      *           ↓
      *   body = "{\"name\": \"John\"}"
-     * 
+     *
      * @param requestLine The first line of HTTP request (e.g., "GET /users HTTP/1.1")
-     * @param reader      BufferedReader to read headers and body
+     * @param in          Input stream positioned right after the request line
      * @throws IOException if reading fails
      */
-    public HttpRequest(String requestLine, BufferedReader reader) throws IOException {
+    public HttpRequest(String requestLine, InputStream in) throws IOException {
         // ─────────────────────────────────────────────────────────────────────────
         // STEP 1: Parse the REQUEST LINE
         // Format: METHOD URI HTTP/VERSION
         // Example: "GET /api/users?limit=5 HTTP/1.1"
         // ─────────────────────────────────────────────────────────────────────────
-        String[] parts = requestLine.split(" ");
-        this.method = parts.length > 0 ? parts[0].toUpperCase() : "GET";
-        this.uri = parts.length > 1 ? parts[1] : "/";
+        String[] parts = requestLine.trim().split("\\s+");
+        if (parts.length < 2 || !parts[1].startsWith("/")) {
+            throw new IllegalArgumentException("Malformed request line: " + requestLine);
+        }
+        this.method = parts[0].toUpperCase();
+        this.uri = parts[1];
 
         // ─────────────────────────────────────────────────────────────────────────
         // STEP 2: Separate PATH from QUERY STRING
@@ -185,7 +237,7 @@ public class HttpRequest {
         // STEP 4: Parse HEADERS
         // Read lines until we hit an empty line
         // ─────────────────────────────────────────────────────────────────────────
-        this.headers = parseHeaders(reader);
+        parseHeaders(in);
 
         // ─────────────────────────────────────────────────────────────────────────
         // Initialize PATH VARIABLES (populated later by RouteResolver)
@@ -198,7 +250,7 @@ public class HttpRequest {
         // POST, PUT, PATCH do have a body
         // ─────────────────────────────────────────────────────────────────────────
         if ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method)) {
-            this.body = readBody(reader);
+            this.body = readBody(in);
         } else {
             this.body = "";
         }
@@ -206,11 +258,11 @@ public class HttpRequest {
 
     /**
      * Parses query string into key-value pairs.
-     * 
+     *
      * ═══════════════════════════════════════════════════════════════════════════
      * HOW QUERY STRING PARSING WORKS
      * ═══════════════════════════════════════════════════════════════════════════
-     * 
+     *
      * Input: "name=John&age=25&city=New%20York"
      *              │
      *              ▼
@@ -222,12 +274,12 @@ public class HttpRequest {
      *   "name=John" → key="name", value="John"
      *              │
      *              ▼
-     * Step 3: URL decode the value
+     * Step 3: URL decode the key and value
      *   "New%20York" → "New York"
      *              │
      *              ▼
      * Output: {"name": "John", "age": "25", "city": "New York"}
-     * 
+     *
      * @param queryString The query string to parse
      * @return Map of parameter names to values
      */
@@ -240,125 +292,150 @@ public class HttpRequest {
         // Split by & to get individual key=value pairs
         String[] pairs = queryString.split("&");
         for (String pair : pairs) {
+            if (pair.isEmpty()) {
+                continue;
+            }
             int eqIndex = pair.indexOf('=');
             if (eqIndex != -1) {
                 String key = pair.substring(0, eqIndex);
                 String value = pair.substring(eqIndex + 1);
-                params.put(key, decodeUrl(value));
+                params.put(decodeUrl(key), decodeUrl(value));
             } else {
                 // Handle parameters without value: "?flag"
-                params.put(pair, "");
+                params.put(decodeUrl(pair), "");
             }
         }
         return params;
     }
 
     /**
-     * Basic URL decoding for common characters.
-     * 
+     * URL decoding ("percent-decoding").
+     *
      * URLs cannot contain certain characters, so they are "percent-encoded":
      *   Space → %20 or +
      *   @ → %40
-     *   # → %23
-     *   etc.
-     * 
-     * This method converts them back to normal characters.
-     * 
-     * Real implementations use java.net.URLDecoder.decode() which is more complete.
+     *   é → %C3%A9   (two UTF-8 bytes)
+     *
+     * java.net.URLDecoder handles ALL of these, including multi-byte UTF-8.
+     *
+     * @throws IllegalArgumentException on invalid escapes like "%ZZ" (→ 400 Bad Request)
      */
-    private String decodeUrl(String value) {
-        return value
-                .replace("%20", " ")
-                .replace("%21", "!")
-                .replace("%40", "@")
-                .replace("%23", "#")
-                .replace("%24", "$")
-                .replace("%26", "&")
-                .replace("%3D", "=")
-                .replace("+", " ");
+    static String decodeUrl(String value) {
+        return URLDecoder.decode(value, StandardCharsets.UTF_8);
     }
 
     /**
      * Parses HTTP headers from the request.
-     * 
+     *
      * ═══════════════════════════════════════════════════════════════════════════
      * HOW HEADER PARSING WORKS
      * ═══════════════════════════════════════════════════════════════════════════
-     * 
+     *
      * HTTP headers are lines in format "Name: Value", ending with empty line:
-     * 
+     *
      *   Host: localhost:8080
      *   Content-Type: application/json
      *   Authorization: Bearer abc123
      *   Content-Length: 45
      *   (empty line signals end of headers)
-     * 
+     *
      * We read line by line until we hit an empty line, parsing each into the map.
-     * 
-     * @param reader BufferedReader positioned after the request line
-     * @return Map of header names to values
+     * The space after the colon is optional per the spec ("Host:localhost" is valid).
+     *
+     * @param in Input stream positioned after the request line
      */
-    private Map<String, String> parseHeaders(BufferedReader reader) throws IOException {
-        Map<String, String> headers = new HashMap<>();
+    private void parseHeaders(InputStream in) throws IOException {
         String line;
-        
+        int count = 0;
+
         // Read until empty line (end of headers)
-        while ((line = reader.readLine()) != null && !line.isEmpty()) {
-            // Find the ": " separator
-            int colonIndex = line.indexOf(": ");
-            if (colonIndex != -1) {
+        while ((line = readLine(in)) != null && !line.isEmpty()) {
+            if (++count > MAX_HEADERS) {
+                throw new IllegalArgumentException("Too many headers (max " + MAX_HEADERS + ")");
+            }
+            // Find the ":" separator
+            int colonIndex = line.indexOf(':');
+            if (colonIndex > 0) {
                 String key = line.substring(0, colonIndex).trim();
-                String value = line.substring(colonIndex + 2).trim();
+                String value = line.substring(colonIndex + 1).trim();
                 headers.put(key, value);
             }
         }
-        return headers;
     }
 
     /**
      * Reads the request body based on Content-Length header.
-     * 
+     *
      * ═══════════════════════════════════════════════════════════════════════════
      * HOW BODY READING WORKS
      * ═══════════════════════════════════════════════════════════════════════════
-     * 
-     * The Content-Length header tells us exactly how many bytes to read:
-     * 
+     *
+     * The Content-Length header tells us exactly how many BYTES to read:
+     *
      *   Content-Length: 45
-     *   
+     *
      *   {"name": "John", "email": "john@example.com"}
      *   └──────────────── 45 bytes ─────────────────┘
-     * 
-     * We create a char array of that size and read exactly that many characters.
-     * 
+     *
+     * We read exactly that many bytes, then decode them as UTF-8.
+     *
      * Why not just readLine()? Because the body might:
      * 1. Contain newlines (it's JSON, could be multi-line)
      * 2. Not end with a newline
      * 3. Be binary data (not applicable for JSON APIs)
-     * 
-     * @param reader BufferedReader positioned after headers
+     *
+     * NOTE: "Transfer-Encoding: chunked" bodies are not supported - a real
+     * server would decode them chunk by chunk.
+     *
+     * @param in Input stream positioned after headers
      * @return The request body as a string
      */
-    private String readBody(BufferedReader reader) throws IOException {
+    private String readBody(InputStream in) throws IOException {
         // Get Content-Length header, default to 0 if not present
-        int contentLength = Integer.parseInt(headers.getOrDefault("Content-Length", "0"));
+        int contentLength;
+        try {
+            contentLength = Integer.parseInt(headers.getOrDefault("Content-Length", "0").trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid Content-Length header");
+        }
+        if (contentLength < 0) {
+            throw new IllegalArgumentException("Invalid Content-Length header");
+        }
+        if (contentLength > MAX_BODY_BYTES) {
+            throw new IllegalArgumentException("Request body too large (max " + MAX_BODY_BYTES + " bytes)");
+        }
         if (contentLength == 0) {
             return "";
         }
 
-        // Allocate buffer and read exactly contentLength characters
-        char[] bodyChars = new char[contentLength];
-        int totalRead = 0;
-        
-        // Read in chunks until we have all the bytes
-        // (A single read() might not return all bytes at once)
-        while (totalRead < contentLength) {
-            int read = reader.read(bodyChars, totalRead, contentLength - totalRead);
-            if (read == -1) break;  // End of stream
-            totalRead += read;
+        // readNBytes loops internally until it has all the bytes or hits end-of-stream
+        // (a single read() might not return all bytes at once)
+        byte[] bodyBytes = in.readNBytes(contentLength);
+        return new String(bodyBytes, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Reads one line terminated by CRLF ("\r\n") or LF, decoded as UTF-8.
+     *
+     * @return the line without its terminator, or null at end of stream
+     */
+    static String readLine(InputStream in) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream(128);
+        int b;
+        while ((b = in.read()) != -1) {
+            if (b == '\n') {
+                break;
+            }
+            if (buffer.size() >= MAX_LINE_BYTES) {
+                throw new IllegalArgumentException("Request line or header too long");
+            }
+            buffer.write(b);
         }
-        
-        return new String(bodyChars, 0, totalRead);
+        if (b == -1 && buffer.size() == 0) {
+            return null;
+        }
+        String line = buffer.toString(StandardCharsets.UTF_8);
+        return line.endsWith("\r") ? line.substring(0, line.length() - 1) : line;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -445,7 +522,7 @@ public class HttpRequest {
     }
 
     /**
-     * Gets a header value.
+     * Gets a header value (name lookup is case-insensitive).
      * 
      * Common headers:
      *   - Content-Type: application/json
