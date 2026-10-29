@@ -21,19 +21,27 @@ Other ways to start it:
 
 ```bash
 mvn compile exec:java                  # run from target/classes
-java -jar target/hspring-framework-1.1.0.jar 9090          # custom port (CLI argument)
-java -Dserver.port=9090 -Dserver.threads=20 -jar target/hspring-framework-1.1.0.jar
-PORT=9090 SERVER_THREADS=20 java -jar target/hspring-framework-1.1.0.jar
+java -jar target/hspring-framework-1.1.0.jar --server.port=9090   # custom port (CLI argument)
+java -Dserver.port=9090 -Dserver.thread-pool-size=20 -jar target/hspring-framework-1.1.0.jar
+SERVER_PORT=9090 SERVER_THREAD_POOL_SIZE=20 java -jar target/hspring-framework-1.1.0.jar
 ```
 
-From an IDE: run `WebServer.main`.
+From an IDE: run `Application.main`.
 
 ### Configuration
 
-| Setting | Priority 1 | Priority 2 | Priority 3 | Default |
-|---|---|---|---|---|
-| Port | CLI arg | `-Dserver.port` | `PORT` | 8080 |
-| Worker threads | – | `-Dserver.threads` | `SERVER_THREADS` | 10 |
+Every key in [`application.properties`](../src/main/resources/application.properties) can be overridden,
+highest priority first:
+
+| Priority 1 | Priority 2 | Priority 3 | Priority 4 |
+|---|---|---|---|
+| `--key=value` argument | `-Dkey=value` | `KEY` env var (`.`/`-` → `_`, upper case) | `application.properties` |
+
+| Setting | Key | Default |
+|---|---|---|
+| Port | `server.port` (env `SERVER_PORT` or `PORT`) | 8080 |
+| Worker threads | `server.thread-pool-size` | 10 |
+| Default role for new users | `user.default-role` | USER |
 
 Logging is configured in [`src/main/resources/logback.xml`](../src/main/resources/logback.xml).
 
@@ -62,9 +70,9 @@ mvn test
 |---|---|---|
 | `core/HttpRequestTest` | unit | Request line, query decoding (UTF-8), case-insensitive headers, byte-exact bodies, size limits, malformed input |
 | `core/HttpResponseTest` | unit | Wire format, byte-accurate `Content-Length`, double-send guard, JSON escaping |
-| `com.hspring.routing.RouteResolverTest` | unit | Path variables, decoding, literal-beats-variable, allowed methods, exception unwrapping, signature validation |
-| `com.hspring.container.ApplicationContextTest` | unit | Constructor/field/interface/inherited injection, `@Autowired` constructor choice, bean names, lifecycle, circular/missing/ambiguous dependencies |
-| `WebServerIntegrationTest` | integration | Starts the real server on a random port; CRUD, Unicode, 400/401/404/405, raw malformed requests, lowercase headers, 40 concurrent creates |
+| `com.hspring.routing.RouteResolverTest` | unit | Path variables, decoding, literal-beats-variable, allowed methods, exception unwrapping, signature validation, `ResponseEntity`/return-value serialization |
+| `com.hspring.container.ApplicationContextTest` | unit | Constructor/field/interface/inherited injection, `@Autowired` constructor choice, bean names, lifecycle, circular/missing/ambiguous dependencies, `@Configuration`/`@Bean`, `@Value`, `@Qualifier` |
+| `WebServerIntegrationTest` | integration | Starts the real app via `HSpringApplication.run()` on a random port; CRUD, Unicode, 400/401/404/405, raw malformed requests, lowercase headers, 40 concurrent creates |
 
 Why are some tests under `com.hspring.*`? The integration test component-scans
 `com.project.MultiThreadedWebServer`, and that scan includes `target/test-classes`. Test fixtures annotated

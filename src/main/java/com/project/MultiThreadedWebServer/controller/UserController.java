@@ -10,7 +10,7 @@ import com.project.MultiThreadedWebServer.annotations.PostMapping;
 import com.project.MultiThreadedWebServer.annotations.PutMapping;
 import com.project.MultiThreadedWebServer.annotations.RestController;
 import com.project.MultiThreadedWebServer.core.HttpRequest;
-import com.project.MultiThreadedWebServer.core.HttpResponse;
+import com.project.MultiThreadedWebServer.core.ResponseEntity;
 import com.project.MultiThreadedWebServer.exception.ValidationException;
 import com.project.MultiThreadedWebServer.model.User;
 import com.project.MultiThreadedWebServer.service.UserService;
@@ -21,17 +21,31 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * UserController demonstrates a full RESTful API controller.
+ * ╔══════════════════════════════════════════════════════════════════════════════╗
+ * ║                           USER CONTROLLER                                    ║
+ * ║          (REST API — USES ResponseEntity LIKE REAL SPRING!)                  ║
+ * ╚══════════════════════════════════════════════════════════════════════════════╝
  *
- * This showcases:
- * 1. @RestController annotation for auto-discovery
- * 2. @Autowired for dependency injection (FIELD injection - compare with
- *    UserService, which uses CONSTRUCTOR injection)
- * 3. @GetMapping, @PostMapping, @PutMapping, @DeleteMapping
- * 4. Path variables: /users/{id}
- * 5. Query parameters: /users?limit=10
- * 6. Request body parsing
- * 7. JSON responses
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * BEFORE (Old Way — Manual response building):
+ *   public void getUser(HttpRequest req, HttpResponse resp) {
+ *       User user = userService.findById(id);
+ *       String json = mapper.writeValueAsString(user);
+ *       resp.status(200).json(json);  // Manual!
+ *   }
+ *
+ * AFTER (Spring Way — Return ResponseEntity):
+ *   public ResponseEntity<?> getUser(HttpRequest req) {
+ *       User user = userService.findById(id);
+ *       return ResponseEntity.ok(user);  // Auto-serialized!
+ *   }
+ * ═══════════════════════════════════════════════════════════════════════════════
+ *
+ * Notice:
+ *   1. Methods RETURN ResponseEntity — they don't manually build the response
+ *   2. Methods take only HttpRequest — no HttpResponse needed!
+ *   3. Framework auto-serializes the body object to JSON
+ *   4. Status code is embedded in ResponseEntity
  *
  * ERROR HANDLING STYLE:
  * Handlers do NOT catch exceptions and build error responses themselves.
@@ -39,24 +53,43 @@ import java.util.regex.Pattern;
  * GlobalExceptionHandler turn the exception into the right HTTP status.
  * That's exactly how @ControllerAdvice keeps Spring controllers clean.
  *
- * API Endpoints:
- * - GET    /api/users          - List all users
- * - GET    /api/users/{id}     - Get user by ID
- * - POST   /api/users          - Create new user
- * - PUT    /api/users/{id}     - Update user
- * - DELETE /api/users/{id}     - Delete user
+ * Each endpoint teaches a DIFFERENT concept:
+ *
+ * ┌───────────────────────────────────────────────────────────────────────────────┐
+ * │  Endpoint                │  Concept Taught                                   │
+ * ├───────────────────────────┼─────────────────────────────────────────────────┤
+ * │  GET    /api/users       │  Query parameters (?limit=10)                    │
+ * │  GET    /api/users/{id}  │  Path Variables + ResponseEntity.ok()            │
+ * │  POST   /api/users       │  Request Body + ResponseEntity.created()         │
+ * │  PUT    /api/users/{id}  │  Partial update + input validation               │
+ * │  DELETE /api/users/{id}  │  Exception flow + ResponseEntity.ok()            │
+ * └───────────────────────────────────────────────────────────────────────────────┘
  */
 @RestController("/api")
 public class UserController {
 
-    /** ObjectMapper is thread-safe once configured, so one shared instance is fine. */
-    private static final ObjectMapper objectMapper = new ObjectMapper();
-
     /** Deliberately simple email check: something@something.something */
     private static final Pattern EMAIL_PATTERN = Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
 
+    /**
+     * @Autowired — UserService is automatically injected by the IoC container.
+     * (FIELD injection - compare with UserService, which uses CONSTRUCTOR injection)
+     */
     @Autowired
     private UserService userService;
+
+    /**
+     * @Autowired — ObjectMapper from AppConfig's @Bean method.
+     * Used to parse request bodies (deserialization).
+     *
+     * Note: We still need ObjectMapper for READING request bodies.
+     * The framework auto-serializes RESPONSES (via ResponseEntity),
+     * but we still manually deserialize REQUEST bodies.
+     *
+     * In real Spring, @RequestBody does this automatically.
+     */
+    @Autowired
+    private ObjectMapper objectMapper;
 
     /**
      * GET /api/users - List all users
@@ -65,8 +98,7 @@ public class UserController {
      * - limit: Maximum number of users to return (optional, must be >= 0)
      */
     @GetMapping("/users")
-    public void getAllUsers(HttpRequest request, HttpResponse response) throws JsonProcessingException {
-        // Demonstrate query parameter usage
+    public ResponseEntity<?> getAllUsers(HttpRequest request) {
         String limitStr = request.getQueryParam("limit");
         Integer limit = null;
         if (limitStr != null) {
@@ -79,43 +111,51 @@ public class UserController {
 
         List<User> users = userService.getAllUsers(limit);
 
-        // Build response
-        Map<String, Object> responseBody = new LinkedHashMap<>();
-        responseBody.put("success", true);
-        responseBody.put("count", users.size());
-        responseBody.put("data", users);
-        response.status(HttpResponse.OK).json(objectMapper.writeValueAsString(responseBody));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", true);
+        body.put("count", users.size());
+        body.put("data", users);
+        return ResponseEntity.ok(body);
     }
 
     /**
-     * GET /api/users/{id} - Get user by ID
+     * GET /api/users/{id} — Demonstrates Path Variable + ResponseEntity.
+     *
+     * The framework reads the ResponseEntity, serializes the body Map to JSON,
+     * sets status 200, and sends the response. You just return!
      *
      * Throws NotFoundException (→ 404) if the user does not exist.
      */
     @GetMapping("/users/{id}")
-    public void getUserById(HttpRequest request, HttpResponse response) throws JsonProcessingException {
-        long id = parseId(request);
-        User user = userService.getUserById(id);
+    public ResponseEntity<?> getUserById(HttpRequest request) {
+        User user = userService.getUserById(parseId(request));
 
-        Map<String, Object> responseBody = new LinkedHashMap<>();
-        responseBody.put("success", true);
-        responseBody.put("data", user);
-        response.status(HttpResponse.OK).json(objectMapper.writeValueAsString(responseBody));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", true);
+        body.put("data", user);
+        return ResponseEntity.ok(body);
     }
 
     /**
-     * POST /api/users - Create new user
+     * POST /api/users — Demonstrates Request Body + ResponseEntity.created().
      *
-     * Request body: {"name": "John", "email": "john@example.com"}
-     * Responds 201 Created.
+     * When a client sends:
+     *   POST /api/users
+     *   Content-Type: application/json
+     *   {"name": "John", "email": "john@mail.com"}
+     *
+     * We:
+     * 1. Read the raw body string from HttpRequest
+     * 2. Deserialize JSON (in real Spring: @RequestBody does this)
+     * 3. Validate required fields
+     * 4. Return ResponseEntity.created(newUser)  ← 201 status + Location header
      */
     @PostMapping("/users")
-    public void createUser(HttpRequest request, HttpResponse response) throws JsonProcessingException {
+    public ResponseEntity<?> createUser(HttpRequest request) {
         Map<String, String> userData = readJsonBody(request);
         String name = userData.get("name");
         String email = userData.get("email");
 
-        // Validate input
         if (name == null || name.isBlank()) {
             throw new ValidationException("name", "Name is required");
         }
@@ -125,13 +165,13 @@ public class UserController {
 
         User newUser = userService.createUser(name.trim(), email.trim());
 
-        Map<String, Object> responseBody = new LinkedHashMap<>();
-        responseBody.put("success", true);
-        responseBody.put("message", "User created successfully");
-        responseBody.put("data", newUser);
-        response.status(HttpResponse.CREATED)
-                .header("Location", "/api/users/" + newUser.id())
-                .json(objectMapper.writeValueAsString(responseBody));
+        // Return 201 Created — NOT 200 OK!
+        // This is the correct HTTP status for resource creation.
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", true);
+        body.put("message", "User created successfully");
+        body.put("data", newUser);
+        return ResponseEntity.created(body).header("Location", "/api/users/" + newUser.id());
     }
 
     /**
@@ -141,7 +181,7 @@ public class UserController {
      * Fields that are missing keep their current value.
      */
     @PutMapping("/users/{id}")
-    public void updateUser(HttpRequest request, HttpResponse response) throws JsonProcessingException {
+    public ResponseEntity<?> updateUser(HttpRequest request) {
         long id = parseId(request);
         Map<String, String> userData = readJsonBody(request);
         String name = userData.get("name");
@@ -161,25 +201,28 @@ public class UserController {
                 name == null ? null : name.trim(),
                 email == null ? null : email.trim());
 
-        Map<String, Object> responseBody = new LinkedHashMap<>();
-        responseBody.put("success", true);
-        responseBody.put("message", "User updated successfully");
-        responseBody.put("data", updatedUser);
-        response.status(HttpResponse.OK).json(objectMapper.writeValueAsString(responseBody));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", true);
+        body.put("message", "User updated successfully");
+        body.put("data", updatedUser);
+        return ResponseEntity.ok(body);
     }
 
     /**
-     * DELETE /api/users/{id} - Delete user
+     * DELETE /api/users/{id} — Demonstrates Exception Flow.
+     *
+     * If the user doesn't exist, UserService.deleteUser() throws NotFoundException.
+     * That exception propagates up to GlobalExceptionHandler (like @ControllerAdvice)
+     * which formats a proper 404 JSON error response automatically.
      */
     @DeleteMapping("/users/{id}")
-    public void deleteUser(HttpRequest request, HttpResponse response) throws JsonProcessingException {
-        long id = parseId(request);
-        userService.deleteUser(id);
+    public ResponseEntity<?> deleteUser(HttpRequest request) {
+        userService.deleteUser(parseId(request));
 
-        Map<String, Object> responseBody = new LinkedHashMap<>();
-        responseBody.put("success", true);
-        responseBody.put("message", "User deleted successfully");
-        response.status(HttpResponse.OK).json(objectMapper.writeValueAsString(responseBody));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", true);
+        body.put("message", "User deleted successfully");
+        return ResponseEntity.ok(body);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

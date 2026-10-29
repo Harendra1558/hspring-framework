@@ -2,6 +2,7 @@ package com.project.MultiThreadedWebServer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.project.MultiThreadedWebServer.core.HSpringApplication;
 import com.project.MultiThreadedWebServer.core.HttpRequest;
 import com.project.MultiThreadedWebServer.core.HttpResponse;
 import com.project.MultiThreadedWebServer.exception.UnauthorizedException;
@@ -32,19 +33,23 @@ import java.util.concurrent.Future;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Starts the REAL server (component scan, routing, filters, exception handling)
- * on a random free port and talks to it over HTTP.
+ * Starts the REAL application via HSpringApplication.run() (component scan,
+ * properties, routing, filters, exception handling) on a random free port
+ * and talks to it over HTTP.
  */
 class WebServerIntegrationTest {
 
     private static final ObjectMapper mapper = new ObjectMapper();
+    private static HSpringApplication app;
     private static WebServer server;
     private static HttpClient client;
     private static String baseUrl;
 
     @BeforeAll
     static void startServer() {
-        server = new WebServer(0, 8);   // port 0 = let the OS choose a free port
+        // port 0 = let the OS choose a free port
+        app = HSpringApplication.run(Application.class, "--server.port=0", "--server.thread-pool-size=8");
+        server = app.getWebServer();
         // Demo auth filter: any request carrying "X-Block: yes" is rejected with 401
         server.addFilter(new Filter() {
             @Override
@@ -60,7 +65,6 @@ class WebServerIntegrationTest {
                 return 10;
             }
         });
-        server.start(WebServer.BASE_PACKAGE);
         baseUrl = "http://localhost:" + server.getPort();
         client = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
@@ -70,7 +74,7 @@ class WebServerIntegrationTest {
 
     @AfterAll
     static void stopServer() {
-        server.stop();
+        app.stop();
     }
 
     // ─────────────────────────────────────────────────────────────────────────

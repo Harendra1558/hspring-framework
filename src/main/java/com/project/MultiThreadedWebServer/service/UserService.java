@@ -1,7 +1,9 @@
 package com.project.MultiThreadedWebServer.service;
 
 import com.project.MultiThreadedWebServer.annotations.PostConstruct;
+import com.project.MultiThreadedWebServer.annotations.PreDestroy;
 import com.project.MultiThreadedWebServer.annotations.Service;
+import com.project.MultiThreadedWebServer.annotations.Value;
 import com.project.MultiThreadedWebServer.exception.NotFoundException;
 import com.project.MultiThreadedWebServer.model.User;
 import com.project.MultiThreadedWebServer.repository.UserRepository;
@@ -11,19 +13,27 @@ import org.slf4j.LoggerFactory;
 import java.util.List;
 
 /**
- * UserService is a sample Service layer component.
- * Demonstrates the @Service annotation, CONSTRUCTOR INJECTION and @PostConstruct.
+ * UserService demonstrates the Service layer in Spring Boot.
  *
- * In Spring Boot, services contain business logic and are typically
- * injected into controllers. Constructor injection is the recommended style:
+ * CONCEPTS SHOWN HERE:
  *
- *   1. The dependency can be FINAL → the object is immutable and thread-safe
- *   2. The object can never exist in a half-built state (no null fields)
- *   3. Easy to unit test: just call  new UserService(fakeRepository)
- *   4. Circular dependencies are detected at startup instead of hiding
+ * 1. CONSTRUCTOR INJECTION (the recommended style)
+ *    1. The dependency can be FINAL → the object is immutable and thread-safe
+ *    2. The object can never exist in a half-built state (no null fields)
+ *    3. Easy to unit test: just call  new UserService(fakeRepository)
+ *    4. Circular dependencies are detected at startup instead of hiding
  *
- * No @Autowired is needed: the class has exactly one constructor,
- * so the container uses it automatically (same rule as Spring 4.3+).
+ *    No @Autowired is needed: the class has exactly one constructor,
+ *    so the container uses it automatically (same rule as Spring 4.3+).
+ *
+ * 2. @Value("property.key") → Injects config from application.properties
+ *    Instead of hardcoding "USER", the default role is read from config.
+ *
+ * 3. @PostConstruct → Called AFTER the bean is created AND all @Value/@Autowired
+ *    fields are injected. Safe to use injected values here (unlike the constructor).
+ *
+ * 4. @PreDestroy → Called when the application shuts down.
+ *    Used for cleanup (closing connections, flushing caches, etc.)
  */
 @Service
 public class UserService {
@@ -32,20 +42,56 @@ public class UserService {
 
     private final UserRepository userRepository;
 
+    /**
+     * @Value injects from application.properties:
+     *   user.default-role=USER
+     *
+     * This value is NOT available in the constructor!
+     * It's injected AFTER construction, which is why we use @PostConstruct below.
+     */
+    @Value("user.default-role")
+    private String defaultRole;
+
+    /**
+     * Constructor — called FIRST in the bean lifecycle.
+     *
+     * IMPORTANT: @Value fields are NULL here!
+     * Do NOT try to use defaultRole in the constructor.
+     */
     public UserService(UserRepository userRepository) {
         this.userRepository = userRepository;
     }
 
     /**
-     * Pre-populates the store with sample data.
-     * Runs once after the container has injected all dependencies.
+     * @PostConstruct — called AFTER all @Value and @Autowired injections.
+     *
+     * ═══════════════════════════════════════════════════════════════════════════
+     * LIFECYCLE ORDER:
+     *   1. new UserService(repo)    → constructor (defaultRole = null)
+     *   2. @Value injection         → defaultRole = "USER" (from properties)
+     *   3. @PostConstruct           → NOW we can safely use defaultRole! ✓
+     * ═══════════════════════════════════════════════════════════════════════════
      */
     @PostConstruct
     public void loadSampleData() {
+        logger.info("@PostConstruct: defaultRole is now '{}' (loaded from application.properties)", defaultRole);
         createUser("John Doe", "john@example.com");
         createUser("Jane Smith", "jane@example.com");
         createUser("Bob Johnson", "bob@example.com");
         logger.info("UserService initialized with {} sample users", userRepository.count());
+    }
+
+    /**
+     * @PreDestroy — called when the application shuts down.
+     *
+     * Use cases in real apps:
+     * - Close database connections
+     * - Flush caches to disk
+     * - Release file handles
+     */
+    @PreDestroy
+    public void cleanup() {
+        logger.info("@PreDestroy: UserService shutting down with {} users in memory", userRepository.count());
     }
 
     /**
@@ -77,15 +123,15 @@ public class UserService {
     }
 
     /**
-     * Creates a new user.
+     * Creates a new user with the default role from @Value configuration.
      *
      * @param name  User's name
      * @param email User's email
      * @return The created user with generated ID
      */
     public User createUser(String name, String email) {
-        User user = userRepository.create(name, email);
-        logger.info("Created user with id: {}", user.id());
+        User user = userRepository.create(name, email, defaultRole);
+        logger.info("Created user with id: {} and role: {}", user.id(), defaultRole);
         return user;
     }
 

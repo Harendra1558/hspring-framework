@@ -6,6 +6,7 @@ import com.project.MultiThreadedWebServer.annotations.PostMapping;
 import com.project.MultiThreadedWebServer.annotations.RestController;
 import com.project.MultiThreadedWebServer.core.HttpRequest;
 import com.project.MultiThreadedWebServer.core.HttpResponse;
+import com.project.MultiThreadedWebServer.core.ResponseEntity;
 import com.project.MultiThreadedWebServer.core.RouteResolver;
 import com.project.MultiThreadedWebServer.exception.NotFoundException;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,6 +16,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -127,5 +129,54 @@ class RouteResolverTest {
     void unsupportedHandlerSignatureFailsAtStartup() {
         RouteResolver fresh = new RouteResolver();
         assertThrows(IllegalStateException.class, () -> fresh.registerController(new BadSignatureController()));
+    }
+
+    @RestController
+    static class ReturnValueController {
+        @PostMapping("/things")
+        public ResponseEntity<Map<String, Object>> create(HttpRequest request) {
+            return ResponseEntity.created(Map.<String, Object>of("id", 1)).header("Location", "/things/1");
+        }
+
+        @GetMapping("/status")
+        public Map<String, String> status() {
+            return Map.of("status", "UP");
+        }
+
+        @GetMapping("/nothing")
+        public Object nothing() {
+            return null;
+        }
+    }
+
+    /** Dispatches to a ReturnValueController and returns the raw HTTP response text. */
+    private static String dispatchReturnValue(String method, String path) throws IOException {
+        RouteResolver fresh = new RouteResolver();
+        fresh.registerController(new ReturnValueController());
+        String raw = method + " " + path + " HTTP/1.1\r\n\r\n";
+        HttpRequest request = HttpRequest.parse(new ByteArrayInputStream(raw.getBytes(StandardCharsets.UTF_8)));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        assertTrue(fresh.resolve(request, new HttpResponse(out)));
+        return out.toString(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void responseEntityStatusHeadersAndBodyAreWritten() throws IOException {
+        String reply = dispatchReturnValue("POST", "/things");
+        assertTrue(reply.startsWith("HTTP/1.1 201"), reply);
+        assertTrue(reply.contains("Location: /things/1"), reply);
+        assertTrue(reply.endsWith("{\"id\":1}"), reply);
+    }
+
+    @Test
+    void plainReturnValueIsSerializedWith200() throws IOException {
+        String reply = dispatchReturnValue("GET", "/status");
+        assertTrue(reply.startsWith("HTTP/1.1 200"), reply);
+        assertTrue(reply.endsWith("{\"status\":\"UP\"}"), reply);
+    }
+
+    @Test
+    void nullReturnValueIs204() throws IOException {
+        assertTrue(dispatchReturnValue("GET", "/nothing").startsWith("HTTP/1.1 204"));
     }
 }

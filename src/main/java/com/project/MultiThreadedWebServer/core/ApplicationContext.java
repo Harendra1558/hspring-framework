@@ -1,11 +1,15 @@
 package com.project.MultiThreadedWebServer.core;
 
 import com.project.MultiThreadedWebServer.annotations.Autowired;
+import com.project.MultiThreadedWebServer.annotations.Bean;
 import com.project.MultiThreadedWebServer.annotations.Component;
+import com.project.MultiThreadedWebServer.annotations.Configuration;
 import com.project.MultiThreadedWebServer.annotations.PostConstruct;
 import com.project.MultiThreadedWebServer.annotations.PreDestroy;
+import com.project.MultiThreadedWebServer.annotations.Qualifier;
 import com.project.MultiThreadedWebServer.annotations.RestController;
 import com.project.MultiThreadedWebServer.annotations.Service;
+import com.project.MultiThreadedWebServer.annotations.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,10 +17,12 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Parameter;
 import java.net.JarURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
@@ -35,14 +41,14 @@ import java.util.jar.JarFile;
  * ║                         APPLICATION CONTEXT                                   ║
  * ║                    (IoC Container / DI Container)                            ║
  * ╚══════════════════════════════════════════════════════════════════════════════╝
- * 
+ *
  * This is the HEART of the framework - the IoC (Inversion of Control) Container.
  * Similar to Spring's ApplicationContext.
- * 
+ *
  * ═══════════════════════════════════════════════════════════════════════════════
  * WHAT IS IOC (INVERSION OF CONTROL)?
  * ═══════════════════════════════════════════════════════════════════════════════
- * 
+ *
  * Traditional approach (without IoC):
  * ┌─────────────────────────────────────────────────────────────────────────────┐
  * │  public class UserController {                                              │
@@ -56,7 +62,7 @@ import java.util.jar.JarFile;
  * │      // 3. Complex dependency chains are hard to manage                    │
  * │  }                                                                          │
  * └─────────────────────────────────────────────────────────────────────────────┘
- * 
+ *
  * IoC approach (what Spring does):
  * ┌─────────────────────────────────────────────────────────────────────────────┐
  * │  @RestController                                                            │
@@ -70,72 +76,66 @@ import java.util.jar.JarFile;
  * │      // 3. Container manages complex dependency chains                     │
  * │  }                                                                          │
  * └─────────────────────────────────────────────────────────────────────────────┘
- * 
+ *
  * ═══════════════════════════════════════════════════════════════════════════════
- * WHAT THIS CLASS DOES (STEP BY STEP)
+ * COMPLETE BEAN LIFECYCLE (STEP BY STEP)
  * ═══════════════════════════════════════════════════════════════════════════════
- * 
+ *
+ * STEP 0: LOAD CONFIGURATION
+ *   → application.properties (+ system properties, env vars, --args)
+ *
  * STEP 1: COMPONENT SCANNING
  * ┌─────────────────────────────────────────────────────────────────────────────┐
  * │  Scan the specified package for classes with these annotations:            │
- * │    - @Component  → General managed component                               │
- * │    - @Service    → Business logic layer                                    │
+ * │    - @Component      → General managed component                           │
+ * │    - @Service        → Business logic layer                                │
  * │    - @RestController → HTTP endpoint handler                               │
- * │                                                                             │
- * │  Example: Scanning "com.project.MyApp" might find:                         │
- * │    - UserController.class (has @RestController)                            │
- * │    - UserService.class (has @Service)                                      │
- * │    - EmailService.class (has @Component)                                   │
+ * │    - @Configuration  → Holds @Bean factory methods                         │
  * └─────────────────────────────────────────────────────────────────────────────┘
- * 
- * STEP 2: BEAN CREATION (+ CONSTRUCTOR INJECTION)
+ *
+ * STEP 2: BEAN CREATION (+ CONSTRUCTOR INJECTION + @BEAN METHODS)
  * ┌─────────────────────────────────────────────────────────────────────────────┐
- * │  For each annotated class found:                                           │
+ * │  For each component class / @Bean method found:                            │
  * │    1. Pick its constructor; create its parameters first (recursively)      │
  * │    2. Create an instance using reflection: constructor.newInstance(args)   │
- * │    3. Store in a Map for later retrieval                                   │
+ * │       (or call the @Bean method: config.objectMapper())                    │
+ * │    3. Store it for later retrieval                                         │
  * │    4. Detect circular constructor dependencies (A → B → A) and fail fast   │
- * │                                                                             │
- * │  After this step, we have:                                                 │
- * │    beans = {                                                                │
- * │      UserController.class → UserController instance                        │
- * │      UserService.class    → UserService instance                           │
- * │      EmailService.class   → EmailService instance                          │
- * │    }                                                                        │
  * └─────────────────────────────────────────────────────────────────────────────┘
- * 
- * STEP 3: DEPENDENCY INJECTION
+ *
+ * STEP 3: @VALUE INJECTION
+ *   → Inject property values into @Value annotated fields
+ *
+ * STEP 4: FIELD INJECTION (@Autowired + @Qualifier)
  * ┌─────────────────────────────────────────────────────────────────────────────┐
- * │  For each bean, look for fields annotated with @Autowired:                 │
- * │                                                                             │
  * │  UserController has:                                                        │
  * │    @Autowired                                                               │
  * │    private UserService userService;  // Need to inject this!              │
  * │                                                                             │
- * │  Find the UserService bean in our map and SET the field:                   │
+ * │  Find the UserService bean in our container and SET the field:             │
  * │    field.set(userControllerInstance, userServiceInstance)                  │
  * │                                                                             │
- * │  Now UserController can use userService without creating it!               │
+ * │  @Qualifier("name") switches the lookup from by-TYPE to by-NAME.           │
  * └─────────────────────────────────────────────────────────────────────────────┘
- * 
- * STEP 4: LIFECYCLE CALLBACKS
+ *
+ * STEP 5: LIFECYCLE CALLBACKS
  * ┌─────────────────────────────────────────────────────────────────────────────┐
  * │  @PostConstruct methods run once all dependencies are injected.            │
  * │  @PreDestroy methods run on close(), in reverse creation order.            │
  * └─────────────────────────────────────────────────────────────────────────────┘
- * 
+ *
  * ═══════════════════════════════════════════════════════════════════════════════
  * TERMINOLOGY
  * ═══════════════════════════════════════════════════════════════════════════════
- * 
+ *
  * BEAN: An object managed by the container. Created once, reused everywhere.
  *       Think of it as a "singleton" managed by the framework.
- * 
+ *
  * CONTAINER: This class! It "contains" and manages all the beans.
- * 
+ *
  * INJECTION: The act of setting a dependency into an object.
  *            Instead of object creating its dependency, we "inject" it.
- * 
+ *
  * WIRING: The process of connecting beans together via injection.
  *         "Wiring UserService into UserController"
  */
@@ -144,24 +144,15 @@ public class ApplicationContext {
     private static final Logger logger = LoggerFactory.getLogger(ApplicationContext.class);
 
     /**
-     * Storage for all managed beans, indexed by their class type.
-     *
-     * Example contents:
-     *   UserService.class → UserService@abc123
-     *   UserController.class → UserController@def456
-     *
-     * Using ConcurrentHashMap for thread-safety (multiple threads may access).
-     */
-    private final Map<Class<?>, Object> beansByType = new ConcurrentHashMap<>();
-
-    /**
      * Storage for beans indexed by name.
      *
      * Example contents:
      *   "userService" → UserService@abc123
      *   "userController" → UserController@def456
+     *   "objectMapper" → ObjectMapper@789abc   (from a @Bean method)
      *
-     * The name is derived from the class name with first letter lowercase.
+     * The name is derived from the class name with first letter lowercase,
+     * the @Bean method name, or set explicitly: @Component("customName").
      */
     private final Map<String, Object> beansByName = new ConcurrentHashMap<>();
 
@@ -185,7 +176,13 @@ public class ApplicationContext {
     private final Set<Class<?>> componentClasses = new LinkedHashSet<>();
 
     /**
-     * Beans whose constructor is currently being resolved.
+     * All @Bean factory methods found on @Configuration classes.
+     * Also bean definitions: the method is only called when we get to it.
+     */
+    private final List<Method> beanMethods = new ArrayList<>();
+
+    /**
+     * Beans whose constructor (or @Bean method) is currently being resolved.
      *
      * If we're asked to create a bean that is already in this set, we've found
      * a CIRCULAR DEPENDENCY: A needs B, B needs A → neither can be built first.
@@ -194,7 +191,22 @@ public class ApplicationContext {
     private final Set<Class<?>> currentlyInCreation = new LinkedHashSet<>();
 
     /**
-     * Creates the ApplicationContext and scans the given base package for components.
+     * Properties loader — resolves values for @Value injection.
+     */
+    private final PropertiesLoader propertiesLoader;
+
+    /**
+     * Creates the ApplicationContext, loading application.properties from the classpath.
+     *
+     * @param basePackages The packages to scan (e.g., "com.project.MultiThreadedWebServer")
+     * @throws BeanCreationException if any bean cannot be created (fail fast, like Spring)
+     */
+    public ApplicationContext(String... basePackages) {
+        this(new PropertiesLoader(), basePackages);
+    }
+
+    /**
+     * Creates the ApplicationContext and scans the given base packages for components.
      * This is where all the magic happens!
      *
      * ═══════════════════════════════════════════════════════════════════════════
@@ -205,40 +217,58 @@ public class ApplicationContext {
      *   T=0ms   Constructor called
      *   T=5ms   Package scanning complete (found N classes)
      *   T=10ms  Bean creation complete (created M beans, constructor injection done)
-     *   T=15ms  Field injection complete
+     *   T=15ms  @Value + field injection complete
      *   T=15ms  @PostConstruct methods called
      *   T=15ms  Context is READY - beans can be used!
      *
-     * @param basePackage The package to scan (e.g., "com.project.MultiThreadedWebServer")
+     * @param propertiesLoader Configuration used for @Value injection
+     * @param basePackages     The packages to scan (e.g., "com.project.MultiThreadedWebServer")
      * @throws BeanCreationException if any bean cannot be created (fail fast, like Spring)
      */
-    public ApplicationContext(String basePackage) {
+    public ApplicationContext(PropertiesLoader propertiesLoader, String... basePackages) {
         logger.info("╔══════════════════════════════════════════════════════════╗");
         logger.info("║      Initializing IoC Container (ApplicationContext)     ║");
         logger.info("╚══════════════════════════════════════════════════════════╝");
-        logger.info("Base package: {}", basePackage);
+        logger.info("Base packages: {}", String.join(", ", basePackages));
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // STEP 0: LOAD CONFIGURATION
+        // Properties must be available BEFORE any bean is created
+        // ═══════════════════════════════════════════════════════════════════════
+        this.propertiesLoader = propertiesLoader;
 
         // ═══════════════════════════════════════════════════════════════════════
         // STEP 1: COMPONENT SCANNING
-        // Find all .class files in the package and its subpackages
+        // Find all .class files in the packages and their subpackages
         // (works for both target/classes directories AND packaged JAR files)
         // ═══════════════════════════════════════════════════════════════════════
         logger.info("┌─────────────────────────────────────────────────────────┐");
         logger.info("│ STEP 1: Scanning for components...                      │");
         logger.info("└─────────────────────────────────────────────────────────┘");
 
-        List<Class<?>> classes = scanPackage(basePackage);
+        List<Class<?>> classes = new ArrayList<>();
+        for (String basePackage : basePackages) {
+            classes.addAll(scanPackage(basePackage));
+        }
         logger.info("Found {} classes to analyze", classes.size());
         for (Class<?> clazz : classes) {
             if (isComponent(clazz)) {
                 componentClasses.add(clazz);
             }
+            if (clazz.isAnnotationPresent(Configuration.class)) {
+                for (Method method : clazz.getDeclaredMethods()) {
+                    if (method.isAnnotationPresent(Bean.class)) {
+                        beanMethods.add(method);
+                    }
+                }
+            }
         }
 
         // ═══════════════════════════════════════════════════════════════════════
-        // STEP 2: BEAN CREATION + CONSTRUCTOR INJECTION
+        // STEP 2: BEAN CREATION + CONSTRUCTOR INJECTION + @BEAN METHODS
         // For each component class, create an instance. If its constructor
         // needs other beans, those are created first (recursively).
+        // Then call every @Bean method that hasn't been called yet.
         // ═══════════════════════════════════════════════════════════════════════
         logger.info("┌─────────────────────────────────────────────────────────┐");
         logger.info("│ STEP 2: Creating beans...                               │");
@@ -247,26 +277,45 @@ public class ApplicationContext {
         for (Class<?> clazz : componentClasses) {
             getOrCreateBean(clazz);
         }
+        for (Method method : beanMethods) {
+            getOrCreateFactoryBean(method);
+        }
 
         // ═══════════════════════════════════════════════════════════════════════
-        // STEP 3: FIELD INJECTION
+        // STEP 3: @VALUE INJECTION
+        // Inject property values from application.properties
+        // ═══════════════════════════════════════════════════════════════════════
+        logger.info("┌─────────────────────────────────────────────────────────┐");
+        logger.info("│ STEP 3: Injecting @Value properties...                  │");
+        logger.info("└─────────────────────────────────────────────────────────┘");
+
+        for (Object bean : creationOrder) {
+            injectValues(bean);
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        // STEP 4: FIELD INJECTION (@Autowired + @Qualifier)
         // For each bean, find @Autowired fields and inject dependencies.
         // All beans exist by now, so even field-level cycles (A ↔ B) work.
         // ═══════════════════════════════════════════════════════════════════════
         logger.info("┌─────────────────────────────────────────────────────────┐");
-        logger.info("│ STEP 3: Injecting dependencies...                       │");
+        logger.info("│ STEP 4: Injecting @Autowired dependencies...            │");
         logger.info("└─────────────────────────────────────────────────────────┘");
 
         injectDependencies();
 
         // ═══════════════════════════════════════════════════════════════════════
-        // STEP 4: LIFECYCLE CALLBACKS
+        // STEP 5: LIFECYCLE CALLBACKS
         // Call @PostConstruct methods - every dependency is injected by now
         // ═══════════════════════════════════════════════════════════════════════
+        logger.info("┌─────────────────────────────────────────────────────────┐");
+        logger.info("│ STEP 5: Calling @PostConstruct methods...               │");
+        logger.info("└─────────────────────────────────────────────────────────┘");
+
         invokeLifecycleMethods(creationOrder, PostConstruct.class);
 
         logger.info("═══════════════════════════════════════════════════════════");
-        logger.info("ApplicationContext ready with {} beans", beansByType.size());
+        logger.info("ApplicationContext ready with {} beans", creationOrder.size());
         logger.info("═══════════════════════════════════════════════════════════");
     }
 
@@ -274,11 +323,12 @@ public class ApplicationContext {
      * Checks if a class should be managed by the container.
      *
      * A class is a "component" if it has any of these annotations:
-     *   - @Component  → General purpose bean
-     *   - @Service    → Business logic layer
+     *   - @Component      → General purpose bean
+     *   - @Service        → Business logic layer
      *   - @RestController → HTTP endpoint handler
+     *   - @Configuration  → Holds @Bean methods (in Spring, it's a @Component too)
      *
-     * In real Spring, there are more: @Repository, @Configuration, etc.
+     * In real Spring, there are more: @Repository, @Controller, etc.
      *
      * @param clazz The class to check
      * @return true if the class should be managed as a bean
@@ -286,7 +336,8 @@ public class ApplicationContext {
     private boolean isComponent(Class<?> clazz) {
         return clazz.isAnnotationPresent(Component.class) ||
                clazz.isAnnotationPresent(Service.class) ||
-               clazz.isAnnotationPresent(RestController.class);
+               clazz.isAnnotationPresent(RestController.class) ||
+               clazz.isAnnotationPresent(Configuration.class);
     }
 
     /**
@@ -309,46 +360,57 @@ public class ApplicationContext {
      * topological sort. Spring's DefaultListableBeanFactory works the same way.
      *
      * @param requestedType A concrete component class OR an interface/superclass
-     * @return the bean, or null if no component matches the type
+     * @return the bean, or null if no component or @Bean method matches the type
      */
     private Object getOrCreateBean(Class<?> requestedType) {
         // A component class is looked up by EXACT type, so that a subclass bean
         // can never stand in for its (also annotated) parent class
         Object existing = componentClasses.contains(requestedType)
-                ? beansByType.get(requestedType)
+                ? findExactBean(requestedType)
                 : findExistingBean(requestedType);
         if (existing != null) {
             return existing;
         }
 
-        Class<?> implementation = resolveImplementation(requestedType);
+        Object definition = resolveDefinition(requestedType);
+        if (definition instanceof Method factoryMethod) {
+            return getOrCreateFactoryBean(factoryMethod);
+        }
+        Class<?> implementation = (Class<?>) definition;
         if (implementation == null) {
             return null;
         }
 
-        // ─────────────────────────────────────────────────────────────────────────
-        // CIRCULAR DEPENDENCY DETECTION
-        // If this class is already "in creation" further up the call stack,
-        // following this path would recurse forever.
-        // ─────────────────────────────────────────────────────────────────────────
-        if (currentlyInCreation.contains(implementation)) {
-            StringBuilder cycle = new StringBuilder();
-            boolean inCycle = false;
-            for (Class<?> c : currentlyInCreation) {
-                if (c == implementation) inCycle = true;
-                if (inCycle) cycle.append(c.getSimpleName()).append(" → ");
-            }
-            cycle.append(implementation.getSimpleName());
-            throw new BeanCreationException("Circular dependency detected: " + cycle
-                    + "\nBreak the cycle, or use @Autowired field injection on one side.");
-        }
-
-        currentlyInCreation.add(implementation);
+        beginCreation(implementation);
         try {
             return createBean(implementation);
         } finally {
             currentlyInCreation.remove(implementation);
         }
+    }
+
+    /**
+     * Marks a bean type as "in creation", failing if it already is.
+     *
+     * ─────────────────────────────────────────────────────────────────────────────
+     * CIRCULAR DEPENDENCY DETECTION
+     * If this type is already "in creation" further up the call stack,
+     * following this path would recurse forever.
+     * ─────────────────────────────────────────────────────────────────────────────
+     */
+    private void beginCreation(Class<?> type) {
+        if (currentlyInCreation.contains(type)) {
+            StringBuilder cycle = new StringBuilder();
+            boolean inCycle = false;
+            for (Class<?> c : currentlyInCreation) {
+                if (c == type) inCycle = true;
+                if (inCycle) cycle.append(c.getSimpleName()).append(" → ");
+            }
+            cycle.append(type.getSimpleName());
+            throw new BeanCreationException("Circular dependency detected: " + cycle
+                    + "\nBreak the cycle, or use @Autowired field injection on one side.");
+        }
+        currentlyInCreation.add(type);
     }
 
     /**
@@ -361,33 +423,19 @@ public class ApplicationContext {
      * 1. Pick the constructor (see selectConstructor)
      * 2. Resolve each constructor parameter to a bean (CONSTRUCTOR INJECTION)
      * 3. Call constructor.newInstance(args...) to create the object
-     * 4. Store in beansByType map: Class → Instance
-     * 5. Store in beansByName map: "className" → Instance
-     * 6. If it's a controller, also add to controllers list
+     * 4. Store it under its name: "className" → Instance
+     * 5. If it's a controller, also add to controllers list
      *
      * Example:
      *   Input: UserService.class
      *   Output:
-     *     beansByType.put(UserService.class, new UserService())
-     *     beansByName.put("userService", theInstance)
+     *     beansByName.put("userService", new UserService(userRepository))
      *
      * @param clazz The class to instantiate
      */
     private Object createBean(Class<?> clazz) {
         Constructor<?> constructor = selectConstructor(clazz);
-        Class<?>[] parameterTypes = constructor.getParameterTypes();
-        Object[] args = new Object[parameterTypes.length];
-
-        // Resolve every constructor argument from the container
-        for (int i = 0; i < parameterTypes.length; i++) {
-            args[i] = getOrCreateBean(parameterTypes[i]);
-            if (args[i] == null) {
-                throw new BeanCreationException("Cannot create " + clazz.getSimpleName()
-                        + ": no bean of type " + parameterTypes[i].getName()
-                        + " for constructor parameter " + i
-                        + "\nMake sure the class has @Component, @Service, or @RestController annotation.");
-            }
-        }
+        Object[] args = resolveArguments(constructor, clazz.getSimpleName());
 
         Object instance;
         try {
@@ -404,26 +452,114 @@ public class ApplicationContext {
 
         // Generate bean name (class name with lowercase first letter)
         String beanName = getBeanName(clazz);
-        if (beansByName.containsKey(beanName)) {
-            throw new BeanCreationException("Duplicate bean name '" + beanName + "' for " + clazz.getName());
-        }
-
-        // Register by type and name for later retrieval
-        beansByType.put(clazz, instance);
-        beansByName.put(beanName, instance);
-        creationOrder.add(instance);
+        register(beanName, instance);
 
         // Track controllers separately - RouteResolver needs them
-        String injected = parameterTypes.length == 0 ? "" : " (constructor-injected " + parameterTypes.length + " dependencies)";
+        String injected = args.length == 0 ? "" : " (constructor-injected " + args.length + " dependencies)";
         if (clazz.isAnnotationPresent(RestController.class)) {
             controllers.add(instance);
             logger.info("  ✓ Registered @RestController: {}{}", clazz.getSimpleName(), injected);
         } else if (clazz.isAnnotationPresent(Service.class)) {
             logger.info("  ✓ Registered @Service: {} as '{}'{}", clazz.getSimpleName(), beanName, injected);
+        } else if (clazz.isAnnotationPresent(Configuration.class)) {
+            logger.info("  ⚙ Registered @Configuration: {}{}", clazz.getSimpleName(), injected);
         } else {
             logger.info("  ✓ Registered @Component: {} as '{}'{}", clazz.getSimpleName(), beanName, injected);
         }
         return instance;
+    }
+
+    /**
+     * Returns the bean produced by a @Bean method, calling the method if needed.
+     *
+     * ═══════════════════════════════════════════════════════════════════════════
+     * HOW @CONFIGURATION + @BEAN PROCESSING WORKS
+     * ═══════════════════════════════════════════════════════════════════════════
+     *
+     * Given:
+     * ┌─────────────────────────────────────────────────────────────────────────┐
+     * │  @Configuration                                                         │
+     * │  public class AppConfig {                                               │
+     * │      @Bean                                                              │
+     * │      public ObjectMapper objectMapper() {                               │
+     * │          return new ObjectMapper();                                      │
+     * │      }                                                                  │
+     * │  }                                                                      │
+     * └─────────────────────────────────────────────────────────────────────────┘
+     *
+     * Steps:
+     * 1. Get (or create) the AppConfig bean
+     * 2. Resolve the method's parameters from the container (like a constructor)
+     * 3. Call objectMapper() → gets an ObjectMapper instance
+     * 4. Register that instance under the name "objectMapper"
+     *
+     * Now anyone can @Autowired ObjectMapper - or take it as a constructor parameter!
+     */
+    private Object getOrCreateFactoryBean(Method method) {
+        String beanName = getBeanName(method);
+        Object existing = beansByName.get(beanName);
+        if (existing != null) {
+            return existing;
+        }
+
+        Class<?> beanType = method.getReturnType();
+        beginCreation(beanType);
+        try {
+            Object config = getOrCreateBean(method.getDeclaringClass());
+            Object[] args = resolveArguments(method, method.getName() + "()");
+            Object instance;
+            try {
+                method.setAccessible(true);
+                instance = method.invoke(config, args);
+            } catch (InvocationTargetException e) {
+                throw new BeanCreationException("@Bean method " + method.getName() + "() threw an exception",
+                        e.getCause());
+            } catch (IllegalAccessException e) {
+                throw new BeanCreationException("Cannot call @Bean method " + method, e);
+            }
+            if (instance == null) {
+                throw new BeanCreationException("@Bean method " + method + " returned null");
+            }
+
+            register(beanName, instance);
+            logger.info("  ✓ Registered @Bean: {} → {}()", beanType.getSimpleName(), method.getName());
+            return instance;
+        } finally {
+            currentlyInCreation.remove(beanType);
+        }
+    }
+
+    /**
+     * Resolves every parameter of a constructor or @Bean method from the container.
+     * A parameter annotated with @Qualifier("name") is looked up by NAME.
+     */
+    private Object[] resolveArguments(Executable executable, String owner) {
+        Parameter[] parameters = executable.getParameters();
+        Object[] args = new Object[parameters.length];
+        for (int i = 0; i < parameters.length; i++) {
+            Qualifier qualifier = parameters[i].getAnnotation(Qualifier.class);
+            Class<?> type = parameters[i].getType();
+            args[i] = qualifier != null
+                    ? getQualifiedBean(qualifier.value(), type)
+                    : getOrCreateBean(type);
+            if (args[i] == null) {
+                throw new BeanCreationException("Cannot create " + owner
+                        + ": no bean of type " + type.getName()
+                        + " for parameter " + i
+                        + "\nMake sure the class has @Component, @Service, or @RestController annotation.");
+            }
+        }
+        return args;
+    }
+
+    /** Adds a fully constructed bean to the container. */
+    private void register(String beanName, Object instance) {
+        if (beansByName.containsKey(beanName)) {
+            throw new BeanCreationException("Duplicate bean name '" + beanName + "' for "
+                    + instance.getClass().getName());
+        }
+        beansByName.put(beanName, instance);
+        creationOrder.add(instance);
     }
 
     /**
@@ -468,29 +604,37 @@ public class ApplicationContext {
     }
 
     /**
-     * Finds which component class should satisfy a requested type.
+     * Finds which bean definition should satisfy a requested type.
      *
-     *   - Requested type IS a component             → itself
-     *   - Exactly one component implements/extends it → that one
-     *   - None                                       → null
-     *   - More than one                              → error (ambiguous!)
+     *   - Requested type IS a component                       → itself
+     *   - Exactly one component / @Bean method matches it     → that one
+     *   - None                                                → null
+     *   - More than one                                       → error (ambiguous!)
      *
      * The last case is Spring's NoUniqueBeanDefinitionException, which Spring
      * lets you resolve with @Primary or @Qualifier.
+     *
+     * @return a component Class, a @Bean Method, or null
      */
-    private Class<?> resolveImplementation(Class<?> requestedType) {
+    private Object resolveDefinition(Class<?> requestedType) {
         if (componentClasses.contains(requestedType)) {
             return requestedType;
         }
-        List<Class<?>> candidates = new ArrayList<>();
+        List<Object> candidates = new ArrayList<>();
         for (Class<?> candidate : componentClasses) {
             if (requestedType.isAssignableFrom(candidate)) {
                 candidates.add(candidate);
             }
         }
+        for (Method method : beanMethods) {
+            if (requestedType.isAssignableFrom(method.getReturnType())) {
+                candidates.add(method);
+            }
+        }
         if (candidates.size() > 1) {
             throw new BeanCreationException("Expected a single bean of type " + requestedType.getName()
-                    + " but found " + candidates.size() + ": " + candidates);
+                    + " but found " + candidates.size() + ": " + candidates
+                    + "\nUse @Qualifier(\"beanName\") to pick one.");
         }
         return candidates.isEmpty() ? null : candidates.get(0);
     }
@@ -522,9 +666,93 @@ public class ApplicationContext {
         return defaultBeanName(clazz);
     }
 
+    /** A @Bean's name is @Bean("name") if given, otherwise the method name. */
+    private static String getBeanName(Method method) {
+        String name = method.getAnnotation(Bean.class).value();
+        return name.isEmpty() ? method.getName() : name;
+    }
+
     private static String defaultBeanName(Class<?> clazz) {
         String className = clazz.getSimpleName();
         return Character.toLowerCase(className.charAt(0)) + className.substring(1);
+    }
+
+    /**
+     * Injects @Value properties from application.properties into a bean's fields.
+     *
+     * ═══════════════════════════════════════════════════════════════════════════
+     * HOW @VALUE INJECTION WORKS
+     * ═══════════════════════════════════════════════════════════════════════════
+     *
+     * Given:
+     *   application.properties: user.default-role=USER
+     *
+     *   @Service
+     *   public class UserService {
+     *       @Value("user.default-role")
+     *       private String defaultRole;    // ← Will be set to "USER"
+     *   }
+     *
+     * Steps:
+     * 1. Check every field (including inherited ones) for @Value
+     * 2. Read the property key from the annotation
+     * 3. Look up the value in PropertiesLoader
+     * 4. Convert to the correct type (String, int, boolean, etc.)
+     * 5. Set the field value via reflection
+     *
+     * A missing property fails startup, like Spring's
+     * "Could not resolve placeholder" error.
+     */
+    private void injectValues(Object bean) {
+        for (Class<?> clazz = bean.getClass(); clazz != null && clazz != Object.class; clazz = clazz.getSuperclass()) {
+            for (Field field : clazz.getDeclaredFields()) {
+                if (!field.isAnnotationPresent(Value.class)) {
+                    continue;
+                }
+                String propertyKey = field.getAnnotation(Value.class).value();
+                String propertyValue = propertiesLoader.getProperty(propertyKey);
+                if (propertyValue == null) {
+                    throw new BeanCreationException("Property '" + propertyKey + "' not found for @Value on "
+                            + clazz.getSimpleName() + "." + field.getName()
+                            + "\nAdd it to application.properties.");
+                }
+                try {
+                    field.setAccessible(true);
+                    // Convert String to the field's actual type
+                    field.set(bean, convertValue(propertyValue, field.getType()));
+                    logger.info("  → @Value(\"{}\") = \"{}\" → {}.{}",
+                            propertyKey, propertyValue, clazz.getSimpleName(), field.getName());
+                } catch (IllegalArgumentException e) {
+                    throw new BeanCreationException("Cannot convert property '" + propertyKey + "' value \""
+                            + propertyValue + "\" to " + field.getType().getSimpleName(), e);
+                } catch (IllegalAccessException e) {
+                    throw new BeanCreationException("Failed to inject @Value field " + field, e);
+                }
+            }
+        }
+    }
+
+    /**
+     * Converts a String property value to the target field type.
+     *
+     * Supports: String, int, long, boolean, double
+     *
+     * @throws IllegalArgumentException if the value can't be converted
+     *         (NumberFormatException is a subclass of it)
+     */
+    private Object convertValue(String value, Class<?> targetType) {
+        String trimmed = value.trim();
+        if (targetType == String.class) return value;
+        if (targetType == int.class || targetType == Integer.class) return Integer.parseInt(trimmed);
+        if (targetType == long.class || targetType == Long.class) return Long.parseLong(trimmed);
+        if (targetType == double.class || targetType == Double.class) return Double.parseDouble(trimmed);
+        if (targetType == boolean.class || targetType == Boolean.class) {
+            if (!trimmed.equalsIgnoreCase("true") && !trimmed.equalsIgnoreCase("false")) {
+                throw new IllegalArgumentException("not a boolean: " + value);
+            }
+            return Boolean.parseBoolean(trimmed);
+        }
+        throw new IllegalArgumentException("unsupported @Value type " + targetType.getName());
     }
 
     /**
@@ -561,7 +789,21 @@ public class ApplicationContext {
      *    b. Find a bean of that type in our container
      *    c. Use reflection to set the field value
      *
-     * After injection, userService field will reference the UserService bean!
+     * ═══════════════════════════════════════════════════════════════════════════
+     * HOW @QUALIFIER RESOLUTION WORKS
+     * ═══════════════════════════════════════════════════════════════════════════
+     *
+     * WITHOUT @Qualifier (default):
+     *   @Autowired
+     *   private UserService userService;
+     *   → Looks up bean by TYPE (UserService.class)
+     *
+     * WITH @Qualifier:
+     *   @Autowired
+     *   @Qualifier("emailNotifier")
+     *   private Notifier notifier;
+     *   → Looks up bean by NAME ("emailNotifier")
+     *   → Solves the "multiple beans of same type" problem
      *
      * @param bean The bean to inject dependencies into
      */
@@ -578,8 +820,11 @@ public class ApplicationContext {
                 Autowired autowired = field.getAnnotation(Autowired.class);
                 Class<?> fieldType = field.getType();
 
-                // Find a bean of the required type
-                Object dependency = getOrCreateBean(fieldType);
+                // Find the bean: by NAME with @Qualifier, otherwise by TYPE
+                Qualifier qualifier = field.getAnnotation(Qualifier.class);
+                Object dependency = qualifier != null
+                        ? getQualifiedBean(qualifier.value(), fieldType)
+                        : getOrCreateBean(fieldType);
 
                 if (dependency != null) {
                     try {
@@ -589,8 +834,9 @@ public class ApplicationContext {
                         // SET THE FIELD VALUE - This is the actual injection!
                         field.set(bean, dependency);
 
-                        logger.info("  → Injected {} into {}.{}",
+                        logger.info("  → Injected {}{} into {}.{}",
                                 fieldType.getSimpleName(),
+                                qualifier != null ? " @Qualifier(\"" + qualifier.value() + "\")" : "",
                                 clazz.getSimpleName(),
                                 field.getName());
 
@@ -601,12 +847,41 @@ public class ApplicationContext {
                     // The dependency was marked as required, but we can't find it!
                     throw new BeanCreationException(
                         "No bean found for required @Autowired dependency: " + fieldType.getName() +
+                        (qualifier != null ? " named '" + qualifier.value() + "'" : "") +
                         " in " + clazz.getSimpleName() + "." + field.getName() +
                         "\nMake sure the class has @Component, @Service, or @RestController annotation."
                     );
                 }
             }
         }
+    }
+
+    /**
+     * Looks up a bean by NAME for @Qualifier, creating it first if it is defined
+     * but not built yet.
+     *
+     * @return the bean, or null if no bean has this name
+     * @throws BeanCreationException if the named bean is not of the required type
+     */
+    private Object getQualifiedBean(String name, Class<?> requiredType) {
+        Object bean = beansByName.get(name);
+        if (bean == null) {
+            for (Class<?> clazz : componentClasses) {
+                if (getBeanName(clazz).equals(name)) {
+                    bean = getOrCreateBean(clazz);
+                }
+            }
+            for (Method method : beanMethods) {
+                if (getBeanName(method).equals(name)) {
+                    bean = getOrCreateFactoryBean(method);
+                }
+            }
+        }
+        if (bean != null && !requiredType.isInstance(bean)) {
+            throw new BeanCreationException("Bean '" + name + "' is a " + bean.getClass().getName()
+                    + ", not a " + requiredType.getName());
+        }
+        return bean;
     }
 
     /**
@@ -640,23 +915,40 @@ public class ApplicationContext {
         }
     }
 
-    /** Looks up an already-created bean by exact type, then by assignable type. */
-    private Object findExistingBean(Class<?> type) {
-        Object bean = beansByType.get(type);
-        if (bean != null) {
-            return bean;
-        }
-        Object match = null;
-        for (Map.Entry<Class<?>, Object> entry : beansByType.entrySet()) {
-            if (type.isAssignableFrom(entry.getKey())) {
-                if (match != null) {
-                    throw new BeanCreationException("Expected a single bean of type " + type.getName()
-                            + " but found more than one");
-                }
-                match = entry.getValue();
+    /** Looks up an already-created bean whose class is exactly this type. */
+    private Object findExactBean(Class<?> type) {
+        for (Object bean : creationOrder) {
+            if (bean.getClass() == type) {
+                return bean;
             }
         }
-        return match;
+        return null;
+    }
+
+    /**
+     * Looks up an already-created bean assignable to this type.
+     * If several match, a single bean of exactly this class wins
+     * (a parent-class bean beats its subclass beans); otherwise it's ambiguous.
+     */
+    private Object findExistingBean(Class<?> type) {
+        List<Object> matches = new ArrayList<>();
+        List<Object> exactMatches = new ArrayList<>();
+        for (Object bean : creationOrder) {
+            if (type.isInstance(bean)) {
+                matches.add(bean);
+                if (bean.getClass() == type) {
+                    exactMatches.add(bean);
+                }
+            }
+        }
+        if (matches.size() <= 1) {
+            return matches.isEmpty() ? null : matches.get(0);
+        }
+        if (exactMatches.size() == 1) {
+            return exactMatches.get(0);
+        }
+        throw new BeanCreationException("Expected a single bean of type " + type.getName()
+                + " but found " + matches.size() + "\nUse @Qualifier(\"beanName\") to pick one.");
     }
 
     /**
@@ -691,7 +983,7 @@ public class ApplicationContext {
 
     /** Number of beans in the container. */
     public int getBeanCount() {
-        return beansByType.size();
+        return creationOrder.size();
     }
 
     /**
@@ -705,6 +997,11 @@ public class ApplicationContext {
         return new ArrayList<>(controllers);
     }
 
+    /** Gets the properties loader (for programmatic access, e.g. server.port). */
+    public PropertiesLoader getPropertiesLoader() {
+        return propertiesLoader;
+    }
+
     /**
      * Registers a bean manually (useful for programmatic configuration).
      *
@@ -712,9 +1009,7 @@ public class ApplicationContext {
      *   context.registerBean(DataSource.class, myDataSource);
      */
     public <T> void registerBean(Class<T> type, T instance) {
-        beansByType.put(type, instance);
-        beansByName.put(defaultBeanName(type), instance);
-        creationOrder.add(instance);
+        register(defaultBeanName(type), instance);
 
         // Track controllers for RouteResolver
         if (type.isAnnotationPresent(RestController.class)) {
@@ -852,7 +1147,6 @@ public class ApplicationContext {
                 logger.error("Error during shutdown of {}", bean.getClass().getSimpleName(), e);
             }
         }
-        beansByType.clear();
         beansByName.clear();
         controllers.clear();
         creationOrder.clear();

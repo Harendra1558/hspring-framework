@@ -144,4 +144,4 @@ responding, send a default 403.
 | Port hard-coded to 8080 | CLI arg / `-Dserver.port` / `PORT` env |
 | `GetMapping`/`PostMapping` in the root package, unlike the other annotations | Moved to `annotations/` |
 | Jackson 2.13.4.2 (known CVEs) | Upgraded to 2.17.2 |
-| No automated tests | 48 JUnit 5 tests incl. a real-server integration test |
+| No automated tests | 53 JUnit 5 tests incl. a real-server integration test |

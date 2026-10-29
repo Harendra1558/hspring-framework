@@ -15,19 +15,26 @@ It ships with a small demo app: a user CRUD REST API (`/api/users`), a home page
 
 ```
 com.project.MultiThreadedWebServer
-├── WebServer.java              Entry point + server (like SpringApplication + embedded Tomcat)
+├── Application.java            Main class: @SpringBootApplication + main()
+├── WebServer.java              Embedded server only (like Tomcat): sockets, thread pool, request lifecycle
 ├── Client.java                 Raw-socket demo client that exercises every endpoint
 │
 ├── annotations/                The "metadata" the framework reads with reflection
+│   ├── SpringBootApplication                  → "this is the main class; scan from here"
 │   ├── Component, Service, RestController     → "manage this class as a bean"
-│   ├── Autowired                              → "inject a dependency here"
+│   ├── Configuration, Bean                    → "this method produces a bean"
+│   ├── Autowired, Qualifier                   → "inject a dependency here (by type / by name)"
+│   ├── Value                                  → "inject a property from application.properties"
 │   ├── PostConstruct, PreDestroy              → lifecycle callbacks
 │   └── GetMapping, PostMapping, PutMapping, DeleteMapping → routing
 │
 ├── core/                       The framework engine
-│   ├── ApplicationContext      IoC container (scan → create → inject → init)
+│   ├── HSpringApplication      Bootstrap orchestrator (like SpringApplication.run())
+│   ├── ApplicationContext      IoC container (scan → create → @Value → inject → init)
+│   ├── PropertiesLoader        application.properties + args/system/env overrides
 │   ├── BeanCreationException   Startup failures (missing/ambiguous/circular deps)
-│   ├── RouteResolver           URL pattern → controller method dispatch
+│   ├── RouteResolver           URL pattern → controller method dispatch + return-value serialization
+│   ├── ResponseEntity          Status + headers + body returned by controllers
 │   ├── HttpRequest             Parses raw bytes into method/path/headers/body
 │   └── HttpResponse            Builds and writes the HTTP response bytes
 │
@@ -41,6 +48,7 @@ com.project.MultiThreadedWebServer
 │   └── NotFoundException, ValidationException, UnauthorizedException
 │
 └── (demo application)
+    ├── config/                 AppConfig         (@Bean ObjectMapper)
     ├── controller/             HomeController, UserController
     ├── service/                UserService       (business logic)
     ├── repository/             UserRepository    (thread-safe in-memory storage)
@@ -48,7 +56,7 @@ com.project.MultiThreadedWebServer
 ```
 
 The **framework** (`annotations`, `core`, `filter`, `exception`, `WebServer`) knows nothing about users.
-The **demo app** (`controller`, `service`, `repository`, `model`) is discovered at runtime by component scanning,
+The **demo app** (`config`, `controller`, `service`, `repository`, `model`) is discovered at runtime by component scanning,
 exactly as your classes are discovered by Spring Boot.
 
 ## Component diagram
@@ -82,25 +90,28 @@ What happens when you run `java -jar target/hspring-framework-1.1.0.jar`:
 
 ```mermaid
 sequenceDiagram
-    participant Main as WebServer.main
+    participant Main as Application.main
+    participant App as HSpringApplication.run
     participant Ctx as ApplicationContext
     participant RR as RouteResolver
-    participant FC as FilterChain
-    participant SS as ServerSocket
+    participant WS as WebServer
 
-    Main->>Main: resolve port/threads (CLI arg → -D property → env var → default)
-    Main->>Main: register JVM shutdown hook (graceful stop)
-    Main->>Ctx: new ApplicationContext("com.project.MultiThreadedWebServer")
+    Main->>App: run(Application.class, args)
+    App->>App: read @SpringBootApplication → base package
+    App->>App: load properties (--args → -D property → env var → application.properties)
+    App->>Ctx: new ApplicationContext(properties, "com.project.MultiThreadedWebServer")
     Ctx->>Ctx: 1. scan classpath (directories and JARs) for .class files
-    Ctx->>Ctx: 2. create beans, constructor-injecting dependencies first (recursive)
-    Ctx->>Ctx: 3. inject @Autowired fields
-    Ctx->>Ctx: 4. call @PostConstruct methods (UserService seeds 3 users)
-    Main->>RR: registerController(each @RestController)
+    Ctx->>Ctx: 2. create beans, constructor-injecting dependencies first (recursive); call @Bean methods
+    Ctx->>Ctx: 3. inject @Value fields
+    Ctx->>Ctx: 4. inject @Autowired fields (@Qualifier → by name)
+    Ctx->>Ctx: 5. call @PostConstruct methods (UserService seeds 3 users)
+    App->>RR: setObjectMapper(@Bean ObjectMapper), registerController(each @RestController)
     RR->>RR: read @GetMapping etc., compile each path to a regex
-    Main->>FC: addFilter(LoggingFilter)
-    Main->>Main: create GlobalExceptionHandler and fixed thread pool
-    Main->>SS: bind port, start "hspring-acceptor" thread
-    Main->>Main: run() joins the acceptor thread (blocks until stop)
+    App->>App: create FilterChain (LoggingFilter) and GlobalExceptionHandler
+    App->>WS: new WebServer(router, filters, handler, port, threads)
+    App->>App: register JVM shutdown hook (graceful stop)
+    App->>WS: start(): bind port, start "hspring-acceptor" thread
+    App-->>Main: return (the non-daemon acceptor thread keeps the JVM alive)
 ```
 
 The startup log shows each step:
@@ -111,9 +122,12 @@ Found 20 classes to analyze
   ✓ Registered @RestController: UserController
   ✓ Registered @Component: UserRepository as 'userRepository'
   ✓ Registered @Service: UserService as 'userService' (constructor-injected 1 dependencies)
+  ✓ Registered @Bean: ObjectMapper → objectMapper()
+  → @Value("user.default-role") = "USER" → UserService.defaultRole
   → Injected UserService into UserController.userService
+  → Injected ObjectMapper into UserController.objectMapper
   ⚙ Called @PostConstruct UserService.loadSampleData()
-ApplicationContext ready with 4 beans
+ApplicationContext ready with 6 beans
   GET /api/users/{id} → UserController.getUserById()
   ...
 ```

@@ -24,12 +24,15 @@ The server starts with three users: John Doe (1), Jane Smith (2), Bob Johnson (3
   "id": 1,
   "name": "John Doe",
   "email": "john@example.com",
+  "role": "USER",
   "createdAt": 1761552000000,
   "updatedAt": 1761552100000
 }
 ```
 
+`role` comes from `user.default-role` in `application.properties`.
 `updatedAt` is omitted until the user is first updated. Timestamps are epoch milliseconds.
+Responses are pretty-printed (the `ObjectMapper` bean enables `INDENT_OUTPUT`); the examples below are compacted.
 
 ## Examples
 
@@ -49,8 +52,8 @@ curl "http://localhost:8080/api/users?limit=2"
 ```
 ```json
 {"success":true,"count":2,"data":[
-  {"id":1,"name":"John Doe","email":"john@example.com","createdAt":1761552000000},
-  {"id":2,"name":"Jane Smith","email":"jane@example.com","createdAt":1761552000001}
+  {"id":1,"name":"John Doe","email":"john@example.com","role":"USER","createdAt":1761552000000},
+  {"id":2,"name":"Jane Smith","email":"jane@example.com","role":"USER","createdAt":1761552000001}
 ]}
 ```
 
@@ -62,7 +65,7 @@ curl "http://localhost:8080/api/users?limit=2"
 curl http://localhost:8080/api/users/1
 ```
 ```json
-{"success":true,"data":{"id":1,"name":"John Doe","email":"john@example.com","createdAt":1761552000000}}
+{"success":true,"data":{"id":1,"name":"John Doe","email":"john@example.com","role":"USER","createdAt":1761552000000}}
 ```
 
 ### Create a user
@@ -76,7 +79,7 @@ curl -i -X POST http://localhost:8080/api/users \
 HTTP/1.1 201 Created
 Location: /api/users/4
 
-{"success":true,"message":"User created successfully","data":{"id":4,"name":"Alice Wonder","email":"alice@example.com","createdAt":1761552000000}}
+{"success":true,"message":"User created successfully","data":{"id":4,"name":"Alice Wonder","email":"alice@example.com","role":"USER","createdAt":1761552000000}}
 ```
 
 Rules: `name` required and not blank; `email` required and must look like `x@y.z`. Values are trimmed.
@@ -89,7 +92,7 @@ curl -X PUT http://localhost:8080/api/users/1 \
   -d '{"email": "john.new@example.com"}'
 ```
 ```json
-{"success":true,"message":"User updated successfully","data":{"id":1,"name":"John Doe","email":"john.new@example.com","createdAt":1761552000000,"updatedAt":1761552100000}}
+{"success":true,"message":"User updated successfully","data":{"id":1,"name":"John Doe","email":"john.new@example.com","role":"USER","createdAt":1761552000000,"updatedAt":1761552100000}}
 ```
 
 Send at least one of `name`, `email`. Missing fields keep their value.

@@ -38,9 +38,9 @@ public class UserRepository {
     private final AtomicLong idGenerator = new AtomicLong(1);
 
     /** Creates and stores a new user with a freshly generated id. */
-    public User create(String name, String email) {
+    public User create(String name, String email, String role) {
         long id = idGenerator.getAndIncrement();
-        User user = new User(id, name, email, System.currentTimeMillis(), null);
+        User user = new User(id, name, email, role, System.currentTimeMillis(), null);
         users.put(id, user);
         return user;
     }

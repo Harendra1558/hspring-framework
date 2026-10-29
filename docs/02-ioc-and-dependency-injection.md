@@ -24,20 +24,26 @@ public class UserController {
 }
 ```
 
-## The four phases
+## The phases
 
 ```
-new ApplicationContext("com.project.MultiThreadedWebServer")
+new ApplicationContext(properties, "com.project.MultiThreadedWebServer")
+ │
+ ├─ 0. CONFIG      properties are loaded before any bean exists (PropertiesLoader)
  │
  ├─ 1. SCAN        find every .class under the package (folders AND jar files)
- │                 keep the ones annotated @Component / @Service / @RestController
+ │                 keep the ones annotated @Component / @Service / @RestController / @Configuration,
+ │                 and remember every @Bean method on the @Configuration classes
  │
  ├─ 2. CREATE      for each component: pick a constructor, create its arguments first
- │                 (recursively), then instantiate. Detect constructor cycles.
+ │                 (recursively), then instantiate. Call each @Bean method the same way.
+ │                 Detect constructor cycles.
  │
- ├─ 3. INJECT      set every @Autowired field (including inherited fields)
+ ├─ 3. VALUES      set every @Value field from the properties
  │
- └─ 4. INITIALIZE  call @PostConstruct methods
+ ├─ 4. INJECT      set every @Autowired field (including inherited fields)
+ │
+ └─ 5. INITIALIZE  call @PostConstruct methods
                    ... later, close() calls @PreDestroy in reverse creation order
 ```
 
@@ -115,7 +121,39 @@ so `PingService.pong` and `PongService.ping` can point at each other. Spring beh
 it resolves setter/field cycles through "early singleton references". Spring Boot 2.6+ still **forbids** them
 by default (`spring.main.allow-circular-references=false`), because a cycle usually signals a design problem.
 
-### Phase 3: field injection
+### @Configuration and @Bean
+
+You can't put `@Component` on a class you don't own, such as Jackson's `ObjectMapper`.
+A `@Bean` method is a factory the container calls instead:
+
+```java
+@Configuration
+public class AppConfig {
+    @Bean
+    public ObjectMapper objectMapper() { ... }   // bean name = method name: "objectMapper"
+}
+```
+
+`@Bean` methods are bean definitions just like component classes: the container calls one when it gets to it
+**or when another bean needs its type**, so `UserController` can take the `ObjectMapper` as a field or a
+constructor parameter. Parameters of a `@Bean` method are resolved from the container, like constructor
+parameters. (Real Spring also proxies `@Configuration` classes so that calling one `@Bean` method from another
+returns the singleton; HSpring doesn't, so take dependencies as parameters instead.)
+
+### Phase 3: @Value injection
+
+```java
+@Value("user.default-role")
+private String defaultRole;      // ← "USER" from application.properties
+```
+
+The key is looked up through `PropertiesLoader` (`--key=value` argument → `-D` system property →
+environment variable → `application.properties`) and converted to the field type
+(`String`, `int`, `long`, `double`, `boolean`). A missing key fails startup, like Spring's
+"Could not resolve placeholder". `@Value` fields are set **after** the constructor runs, so use them in
+`@PostConstruct`, not in the constructor (`UserService` shows this).
+
+### Phase 4: field injection
 
 For each bean, walk the class **and its superclasses** (so an `@Autowired` field declared in an abstract base
 controller is injected too). For each `@Autowired` field:
@@ -127,7 +165,14 @@ field.set(bean, dependency);    // ← this line *is* dependency injection
 
 `@Autowired(required = false)` leaves the field `null` when no bean matches; otherwise it's a startup error.
 
-### Phase 4: lifecycle callbacks
+**`@Qualifier("name")`** switches the lookup from by-type to by-name. It solves the "two beans of the same type"
+problem, on fields and on constructor or `@Bean` method parameters:
+
+```java
+public AlertService(@Qualifier("smsNotifier") Notifier notifier) { ... }
+```
+
+### Phase 5: lifecycle callbacks
 
 - `@PostConstruct`: runs once, after injection. `UserService.loadSampleData()` seeds three users here.
   Why not in the constructor? With field injection, fields are still `null` while the constructor runs.
@@ -143,7 +188,7 @@ The demo deliberately uses both:
 | | Constructor injection (`UserService`) | Field injection (`UserController`) |
 |---|---|---|
 | Fields can be `final` | ✅ immutable, safely published to other threads | ❌ |
-| Object can't exist half-built | ✅ | ❌ fields are `null` until phase 3 |
+| Object can't exist half-built | ✅ | ❌ fields are `null` until phase 4 |
 | Unit test without the container | ✅ `new UserService(fakeRepo)` | ❌ needs reflection |
 | Hides "too many dependencies" smell | ❌ long constructor makes it obvious | ✅ (bad) |
 | Circular dependency | fails fast | silently allowed |
@@ -154,7 +199,9 @@ The demo deliberately uses both:
 
 - Default name: simple class name with a lower-case first letter (`UserService` → `userService`).
 - Override: `@Service("greeter")` / `@Component("name")`. Duplicate names are a startup error.
-- `getBean(Class)`: exact type first, then any assignable type (ambiguous → error).
+- `@Bean` methods: the method name, or `@Bean("name")`.
+- `getBean(Class)`: any bean assignable to the type; if several match, a single bean of exactly that class
+  wins, otherwise it's ambiguous → error (use `@Qualifier` at injection points).
 - `getBean(String)`: by name.
 
 All beans are **singletons**: one instance shared by every request thread. That's why beans must be
@@ -169,6 +216,7 @@ stateless or thread-safe (see `UserRepository`, which uses `ConcurrentHashMap` a
 | `Expected a single bean of type X but found 2` | Two implementations of an interface |
 | `X has several constructors - mark one with @Autowired…` | Constructor choice is ambiguous |
 | `Duplicate bean name 'x'` | Two components with the same name |
+| `Property 'x' not found for @Value on …` | Key missing from `application.properties` (and not set any other way) |
 
 ## Try it
 

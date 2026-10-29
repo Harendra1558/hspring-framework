@@ -1,5 +1,7 @@
 package com.project.MultiThreadedWebServer.core;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.project.MultiThreadedWebServer.annotations.DeleteMapping;
 import com.project.MultiThreadedWebServer.annotations.PutMapping;
 import com.project.MultiThreadedWebServer.annotations.RestController;
@@ -43,9 +45,25 @@ import java.util.regex.Pattern;
  *   └───────────────────────────────────────────────────────────────────────────┘
  * 
  * ═══════════════════════════════════════════════════════════════════════════════
+ * SUPPORTED CONTROLLER METHOD SIGNATURES (from least to most Spring-like)
+ * ═══════════════════════════════════════════════════════════════════════════════
+ *
+ * 1. void method(HttpRequest, HttpResponse)    — Manual control (old style)
+ * 2. void method(HttpResponse)                 — Manual, request not needed
+ * 3. ResponseEntity<T> method(HttpRequest)     — Spring-like: return ResponseEntity
+ * 4. Object method(HttpRequest) / method()     — Spring-like: auto-wrap in 200 OK
+ *
+ * When a method returns ResponseEntity or Object, the framework:
+ *   → Reads the status code from ResponseEntity (or defaults to 200)
+ *   → Auto-serializes the body to JSON using ObjectMapper
+ *   → Sends the complete HTTP response
+ *
+ * This is EXACTLY what Spring's @ResponseBody / @RestController does!
+ *
+ * ═══════════════════════════════════════════════════════════════════════════════
  * HOW PATH VARIABLES WORK
  * ═══════════════════════════════════════════════════════════════════════════════
- * 
+ *
  * Pattern:    /api/users/{id}/posts/{postId}
  *                         ↓           ↓
  *              Variable: "id"   Variable: "postId"
@@ -155,6 +173,15 @@ public class RouteResolver {
     private static final Pattern PATH_VARIABLE_PATTERN = Pattern.compile("\\{([^/]+)\\}");
 
     /**
+     * ObjectMapper for auto-serializing return values to JSON.
+     *
+     * In real Spring, this is part of the HttpMessageConverter system.
+     * We keep it simple: any return value gets serialized to JSON.
+     * volatile: set at startup, read by every worker thread.
+     */
+    private volatile ObjectMapper objectMapper = new ObjectMapper();
+
+    /**
      * Creates a new RouteResolver with empty route maps.
      */
     public RouteResolver() {
@@ -163,6 +190,14 @@ public class RouteResolver {
         routes.put("POST", new ArrayList<>());
         routes.put("PUT", new ArrayList<>());
         routes.put("DELETE", new ArrayList<>());
+    }
+
+    /**
+     * Sets the ObjectMapper used for auto-serialization.
+     * Called by HSpringApplication after the IoC container creates the @Bean ObjectMapper.
+     */
+    public void setObjectMapper(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -266,7 +301,7 @@ public class RouteResolver {
         // ─────────────────────────────────────────────────────────────────────────
         if (!isSupportedSignature(method)) {
             throw new IllegalStateException("Unsupported handler signature: " + method
-                    + " - use (HttpRequest, HttpResponse), (HttpResponse) or ()");
+                    + " - use (HttpRequest, HttpResponse), (HttpRequest), (HttpResponse) or ()");
         }
         method.setAccessible(true);
 
@@ -323,12 +358,15 @@ public class RouteResolver {
                 .comparingInt((RouteInfo r) -> r.paramNames().size())
                 .thenComparing(Comparator.comparingInt((RouteInfo r) -> r.pattern().length()).reversed()));
 
-        // Log the registered route
-        logger.info("  {} {} → {}.{}()", 
-                httpMethod, 
-                pattern, 
-                controller.getClass().getSimpleName(), 
-                method.getName());
+        // Log the registered route, showing which handler style it uses
+        String returnType = method.getReturnType().getSimpleName();
+        String style = returnType.equals("void") ? "(manual response)" : "(auto-serialized → " + returnType + ")";
+        logger.info("  {} {} → {}.{}() {}",
+                httpMethod,
+                pattern,
+                controller.getClass().getSimpleName(),
+                method.getName(),
+                style);
     }
 
     /**
@@ -399,18 +437,27 @@ public class RouteResolver {
      * HANDLER INVOCATION
      * ═══════════════════════════════════════════════════════════════════════════
      * 
-     * Controller methods can have different signatures:
-     * 
-     * 1. (HttpRequest, HttpResponse) - Full access to request and response
-     *    @GetMapping("/users")
-     *    public void getUsers(HttpRequest request, HttpResponse response)
-     * 
-     * 2. (HttpResponse) - Simple endpoints that only need to send response
-     *    @GetMapping("/health")
-     *    public void health(HttpResponse response)
-     * 
-     * We detect the signature and invoke appropriately.
-     * 
+     * Controller methods can have different signatures, progressing
+     * from "manual" to "Spring-like":
+     *
+     * ┌─────────────────────────────────────────────────────────────────────────┐
+     * │  STYLE 1: Manual (old way)                                              │
+     * │  void getUser(HttpRequest request, HttpResponse response)              │
+     * │  → Developer manually builds JSON and calls response.json()            │
+     * │                                                                         │
+     * │  STYLE 2: ResponseEntity (Spring way!)                                 │
+     * │  ResponseEntity<User> getUser(HttpRequest request)                     │
+     * │  → Return ResponseEntity.ok(user), framework does the rest!            │
+     * │                                                                         │
+     * │  STYLE 3: Direct return (Spring @ResponseBody way!)                    │
+     * │  User getUser(HttpRequest request)   or   Map<..> health()             │
+     * │  → Return object directly, framework wraps in 200 OK + JSON            │
+     * └─────────────────────────────────────────────────────────────────────────┘
+     *
+     * In real Spring, @RestController = @Controller + @ResponseBody.
+     * @ResponseBody means "serialize the return value as the response body."
+     * Styles 2 and 3 above implement this exact behavior!
+     *
      * @param routeInfo Route information including controller and method
      * @param request   The HTTP request
      * @param response  The HTTP response
@@ -423,31 +470,38 @@ public class RouteResolver {
 
             // Determine parameter types and invoke accordingly
             Class<?>[] paramTypes = method.getParameterTypes();
-            
-            if (paramTypes.length == 2 && 
-                paramTypes[0] == HttpRequest.class && 
+            Object result;
+
+            if (paramTypes.length == 2 &&
+                paramTypes[0] == HttpRequest.class &&
                 paramTypes[1] == HttpResponse.class) {
-                // Signature: method(HttpRequest request, HttpResponse response)
+                // STYLE 1: method(HttpRequest request, HttpResponse response) - manual
                 method.invoke(controller, request, response);
-                
-            } else if (paramTypes.length == 1 && 
+                return true;  // Developer already handled the response
+
+            } else if (paramTypes.length == 1 &&
                        paramTypes[0] == HttpResponse.class) {
-                // Signature: method(HttpResponse response)
+                // Signature: method(HttpResponse response) - manual
                 method.invoke(controller, response);
-                
+                return true;
+
+            } else if (paramTypes.length == 1 &&
+                       paramTypes[0] == HttpRequest.class) {
+                // STYLE 2 & 3: method(HttpRequest) → returns something
+                result = method.invoke(controller, request);
+
             } else if (paramTypes.length == 0) {
-                // Signature: method() - rare but supported
-                Object result = method.invoke(controller);
-                if (result instanceof String) {
-                    response.json((String) result);
-                }
+                // STYLE 2 & 3 without needing the request
+                result = method.invoke(controller);
+
             } else {
                 // Unreachable: signatures are validated in registerRoute() at startup
                 throw new IllegalStateException("Unsupported handler signature: " + method);
             }
 
+            writeReturnValue(result, response);
             return true;
-            
+
         } catch (InvocationTargetException e) {
             // ─────────────────────────────────────────────────────────────────────
             // UNWRAP THE REAL EXCEPTION
@@ -467,6 +521,49 @@ public class RouteResolver {
             throw new IllegalStateException("Handler threw a checked exception", cause);
         } catch (IllegalAccessException e) {
             throw new IllegalStateException("Cannot access handler method " + routeInfo.method(), e);
+        }
+    }
+
+    /**
+     * AUTO-SERIALIZE THE RETURN VALUE (The @ResponseBody magic!)
+     *
+     * This is what makes @RestController special in Spring:
+     *   - The return value is automatically converted to JSON
+     *   - The HTTP status code is read from ResponseEntity (or defaults to 200)
+     *   - The response is sent to the client
+     *
+     * A null return from a non-void handler is answered with 204 No Content,
+     * so the client never receives an empty reply.
+     */
+    private void writeReturnValue(Object result, HttpResponse response) {
+        int statusCode = HttpResponse.OK;
+        Object body = result;
+
+        if (result instanceof ResponseEntity<?> responseEntity) {
+            // ResponseEntity — extract status, headers and body
+            statusCode = responseEntity.getStatusCode();
+            responseEntity.getHeaders().forEach(response::header);
+            body = responseEntity.getBody();
+        }
+
+        if (body == null) {
+            response.status(result == null ? HttpResponse.NO_CONTENT : statusCode).send("");
+        } else if (body instanceof String str) {
+            // Raw string return — sent as-is, assumed to already be JSON
+            response.status(statusCode).json(str);
+        } else {
+            // AUTO-SERIALIZATION: Object → JSON string
+            // This is what HttpMessageConverter does in real Spring!
+            response.status(statusCode).json(toJson(body));
+        }
+    }
+
+    private String toJson(Object body) {
+        try {
+            return objectMapper.writeValueAsString(body);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Could not serialize response body of type "
+                    + body.getClass().getName(), e);
         }
     }
 
@@ -491,11 +588,12 @@ public class RouteResolver {
         return allowed;
     }
 
-    /** Handler methods may take (HttpRequest, HttpResponse), (HttpResponse) or nothing. */
+    /** Handler methods may take (HttpRequest, HttpResponse), (HttpRequest), (HttpResponse) or nothing. */
     private static boolean isSupportedSignature(Method method) {
         Class<?>[] paramTypes = method.getParameterTypes();
         return paramTypes.length == 0
                 || (paramTypes.length == 1 && paramTypes[0] == HttpResponse.class)
+                || (paramTypes.length == 1 && paramTypes[0] == HttpRequest.class)
                 || (paramTypes.length == 2 && paramTypes[0] == HttpRequest.class
                         && paramTypes[1] == HttpResponse.class);
     }

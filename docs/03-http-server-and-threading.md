@@ -138,21 +138,23 @@ try {
 
 ## Configuration
 
-`WebServer.main` resolves settings in priority order, like Spring's property sources:
+`HSpringApplication` reads the server settings through `PropertiesLoader`, which checks sources in
+priority order, like Spring's property sources:
 
-| Setting | CLI arg | System property | Env variable | Default |
+| Setting | CLI arg | System property | Env variable | `application.properties` |
 |---|---|---|---|---|
-| Port | `java -jar app.jar 9090` | `-Dserver.port=9090` | `PORT` | `8080` |
-| Worker threads | – | `-Dserver.threads=20` | `SERVER_THREADS` | `10` |
+| Port | `--server.port=9090` | `-Dserver.port=9090` | `SERVER_PORT`, then `PORT` | `server.port=8080` |
+| Worker threads | `--server.thread-pool-size=20` | `-Dserver.thread-pool-size=20` | `SERVER_THREAD_POOL_SIZE` | `server.thread-pool-size=10` |
 
 `PORT` is what Railway, Render and Heroku inject, so the JAR runs on those platforms unchanged.
 Port `0` asks the OS for any free port; `getPort()` returns the real one (used by the integration test).
 
 ## Graceful shutdown
 
-`main` registers a JVM shutdown hook (runs on Ctrl+C / SIGTERM) that calls `stop()`:
+`HSpringApplication.run()` registers a JVM shutdown hook (runs on Ctrl+C / SIGTERM) that calls
+`HSpringApplication.stop()`:
 
-1. Close the `ServerSocket` → the acceptor's `accept()` throws, and the loop exits.
+1. `WebServer.stop()` closes the `ServerSocket` → the acceptor's `accept()` throws, and the loop exits.
 2. `threadPool.shutdown()` → no new tasks; in-flight requests finish (up to 5 s, then `shutdownNow()`).
 3. `applicationContext.close()` → `@PreDestroy` methods run.
 

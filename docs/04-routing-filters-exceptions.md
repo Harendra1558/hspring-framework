@@ -24,8 +24,8 @@ variables: [id, postId]
 Routes are stored per HTTP method: `Map<String, List<RouteInfo>>`, where `RouteInfo` is a Java record of
 `(pattern, regex, paramNames, controller, method)`.
 
-**Fail-fast signature check:** a handler must take `(HttpRequest, HttpResponse)`, `(HttpResponse)` or no arguments.
-Anything else throws at startup, not on the first request.
+**Fail-fast signature check:** a handler must take `(HttpRequest, HttpResponse)`, `(HttpRequest)`,
+`(HttpResponse)` or no arguments. Anything else throws at startup, not on the first request.
 
 ### Most specific route wins
 
@@ -39,7 +39,23 @@ Spring's `AntPathMatcher`/`PathPattern` comparators apply the same principle.
 1. Look up the route list for the request's method.
 2. Find the first regex that `matches()` the path.
 3. Copy capture groups into `request.setPathVariable(name, URL-decoded value)`.
-4. `Method.invoke(controller, request, response)`.
+4. `Method.invoke(controller, ...)` with the arguments the signature asks for.
+5. If the handler returned something, write it as the response (below).
+
+### Return values: `ResponseEntity` and `@ResponseBody`
+
+A handler can write the response itself (`void handle(HttpRequest, HttpResponse)`), or **return** it,
+like a Spring `@RestController` method:
+
+| Handler returns | Response |
+|---|---|
+| `ResponseEntity.created(body).header("Location", "/api/users/4")` | status + headers from the entity, body as JSON |
+| any other object, e.g. a `Map` or a record | `200 OK`, object serialized to JSON |
+| a `String` | sent as-is with `Content-Type: application/json` |
+| `null` | `204 No Content` |
+
+Serialization uses the `ObjectMapper` `@Bean` from `AppConfig` (Spring's `HttpMessageConverter` does this job).
+`UserController` uses the return style; `HomeController.home()` writes HTML itself.
 
 ### Unwrapping `InvocationTargetException`
 

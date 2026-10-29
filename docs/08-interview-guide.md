@@ -14,7 +14,7 @@ Each answer gives a short version you can say out loud, then pointers to the cod
 > injection with circular-dependency detection and `@PostConstruct`/`@PreDestroy`. On top of that there's
 > annotation-based routing with path variables, a filter chain, a `@ControllerAdvice`-style exception handler,
 > and a multi-threaded HTTP/1.1 server I wrote directly on `ServerSocket` with a fixed thread pool.
-> It's covered by 48 JUnit tests, including an integration test that boots the real server on a random port."
+> It's covered by 53 JUnit tests, including an integration test that boots the real server on a random port."
 
 ### 2-minute version: add the *story*
 

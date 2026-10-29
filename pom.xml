@@ -23,7 +23,7 @@
     <properties>
         <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <main.class>com.project.MultiThreadedWebServer.WebServer</main.class>
+        <main.class>com.project.MultiThreadedWebServer.Application</main.class>
     </properties>
 
     <dependencies>

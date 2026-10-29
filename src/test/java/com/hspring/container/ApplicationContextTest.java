@@ -1,5 +1,7 @@
 package com.hspring.container;
 
+import com.hspring.testbeans.config.Greeter;
+import com.hspring.testbeans.config.Greeting;
 import com.hspring.testbeans.fieldcycle.PingService;
 import com.hspring.testbeans.fieldcycle.PongService;
 import com.hspring.testbeans.ok.EnglishGreetingService;
@@ -9,9 +11,11 @@ import com.hspring.testbeans.ok.OrderService;
 import com.hspring.testbeans.ok.Repository;
 import com.project.MultiThreadedWebServer.core.ApplicationContext;
 import com.project.MultiThreadedWebServer.core.BeanCreationException;
+import com.project.MultiThreadedWebServer.core.PropertiesLoader;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -115,6 +119,31 @@ class ApplicationContextTest {
     void scanningAnUnknownPackageYieldsEmptyContext() {
         ApplicationContext context = new ApplicationContext("com.hspring.does.not.exist");
         assertEquals(0, context.getBeanCount());
+    }
+
+    @Test
+    void configurationBeansValuesAndQualifiers() {
+        PropertiesLoader properties = new PropertiesLoader(Map.of("test.repeat", "3", "test.enabled", "true"));
+        ApplicationContext context = new ApplicationContext(properties, "com.hspring.testbeans.config");
+        Greeter greeter = context.getBean(Greeter.class);
+
+        // @Bean method parameters are resolved from the container (Punctuation component)
+        assertEquals(new Greeting("hello!"), greeter.getGreeting());
+        // @Qualifier picks between two @Bean methods of the same type
+        assertSame(context.getBean("greeting"), greeter.getGreeting());
+        assertSame(context.getBean("loudGreeting"), greeter.getLoudGreeting());
+        // @Value converts property strings to the field type
+        assertEquals(3, greeter.getRepeat());
+        assertTrue(greeter.isEnabled());
+        // Two beans of type Greeting: a by-type lookup is ambiguous
+        assertThrows(BeanCreationException.class, () -> context.getBean(Greeting.class));
+    }
+
+    @Test
+    void missingValuePropertyFails() {
+        BeanCreationException e = assertThrows(BeanCreationException.class,
+                () -> new ApplicationContext("com.hspring.testbeans.missingvalue"));
+        assertTrue(e.getMessage().contains("test.not.defined"), e.getMessage());
     }
 
     private static Object field(Object target, String name) throws Exception {
